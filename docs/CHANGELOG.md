@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog][kc], and this project adheres to
 
 ### Added
 
+* `SystemExtra::enabled_on` for better support when enabling systems ([#1146]).
 * `amethyst_test` test framework for ergonomic testing of Amethyst applications ([#1000])
 * combinations of buttons triggering actions ([#1043])
 * `UiPrefab` field `hidden: bool` to hide entities ([#1051])
@@ -41,6 +42,7 @@ The format is based on [Keep a Changelog][kc], and this project adheres to
 
 ### Fixed
 
+[#1146]: https://github.com/amethyst/amethyst/pull/1146
 [#1000]: https://github.com/amethyst/amethyst/pull/1000
 [#1043]: https://github.com/amethyst/amethyst/pull/1043
 [#1051]: https://github.com/amethyst/amethyst/pull/1051

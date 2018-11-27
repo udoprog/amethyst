@@ -81,6 +81,8 @@ rustc_version_runtime = "0.1"
 winit = { version = "0.18", features = ["serde"] }
 serde = "1.0"
 serde_derive = "1.0"
+smallvec = "0.6"
+hashbrown = "0.1"
 
 thread_profiler = { version = "0.3", optional = true }
 
@@ -96,6 +98,10 @@ vergen = "2.0"
 [[example]]
 name = "hello_world"
 path = "examples/hello_world/main.rs"
+
+[[example]]
+name = "states"
+path = "examples/states/main.rs"
 
 [[example]]
 name = "window"
@@ -188,10 +194,6 @@ path = "examples/appendix_a/main.rs"
 [[example]]
 name = "locale"
 path = "examples/locale/main.rs"
-
-[[example]]
-name = "custom_game_data"
-path = "examples/custom_game_data/main.rs"
 
 [[example]]
 name = "arc_ball_camera"

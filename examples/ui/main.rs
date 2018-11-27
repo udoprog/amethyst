@@ -28,9 +28,8 @@ struct Example {
     fps_display: Option<Entity>,
 }
 
-impl SimpleState for Example {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        let StateData { world, .. } = data;
+impl<S> StateHandler<S, StateEvent> for Example {
+    fn on_start(&mut self, world: &mut World) {
         // Initialise the scene with an object, a light and a camera.
         let handle = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
             loader.load("prefab/sphere.ron", RonFormat, (), ())
@@ -42,14 +41,10 @@ impl SimpleState for Example {
         });
     }
 
-    fn handle_event(
-        &mut self,
-        _: StateData<'_, GameData<'_, '_>>,
-        event: StateEvent,
-    ) -> SimpleTrans {
-        match &event {
+    fn handle_event(&mut self, _: &mut World, event: &StateEvent) -> Trans<S> {
+        match event {
             StateEvent::Window(event) => {
-                if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
+                if is_close_requested(event) || is_key_down(event, VirtualKeyCode::Escape) {
                     Trans::Quit
                 } else {
                     Trans::None
@@ -65,8 +60,7 @@ impl SimpleState for Example {
         }
     }
 
-    fn update(&mut self, state_data: &mut StateData<'_, GameData<'_, '_>>) -> SimpleTrans {
-        let StateData { world, .. } = state_data;
+    fn update(&mut self, world: &mut World) -> Trans<S> {
         if self.fps_display.is_none() {
             world.exec(|finder: UiFinder<'_>| {
                 if let Some(entity) = finder.find("fps") {
@@ -104,7 +98,11 @@ fn main() -> amethyst::Result<()> {
         .with_bundle(FPSCounterBundle::default())?
         .with_bundle(InputBundle::<String, String>::new())?
         .with_basic_renderer(display_config_path, DrawShaded::<PosNormTex>::new(), true)?;
-    let mut game = Application::new(resources, Example { fps_display: None }, game_data)?;
+
+    let mut game = Application::build(resources)?
+        .with_state((), Example { fps_display: None })?
+        .build(game_data)?;
+
     game.run();
     Ok(())
 }

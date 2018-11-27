@@ -19,13 +19,13 @@
 //!
 //! struct GameState;
 //!
-//! impl EmptyState for GameState {
-//!     fn on_start(&mut self, _: StateData<()>) {
+//! impl<S> StateHandler<S, StateEvent> for GameState {
+//!     fn on_start(&mut self, _: &mut World) {
 //!         println!("Starting game!");
 //!     }
 //!
-//!     fn handle_event(&mut self, _: StateData<()>, event: StateEvent) -> EmptyTrans {
-//!         if let StateEvent::Window(event) = &event {
+//!     fn handle_event(&mut self, _: &mut World, event: &StateEvent) -> Trans<S> {
+//!         if let StateEvent::Window(event) = event {
 //!             match event {
 //!                  Event::WindowEvent { event, .. } => match event {
 //!                     WindowEvent::KeyboardInput {
@@ -41,15 +41,19 @@
 //!         }
 //!     }
 //!
-//!     fn update(&mut self, _: StateData<()>) -> EmptyTrans {
+//!     fn update(&mut self, _: &mut World) -> Trans<S> {
 //!         println!("Computing some more whoop-ass...");
 //!         Trans::Quit
 //!     }
 //! }
 //!
-//! fn main() {
-//!     let mut game = Application::new("assets/", GameState, ()).expect("Fatal error");
+//! fn main() -> amethyst::Result<()> {
+//!     let mut game = Application::build("assets/")?
+//!         .with_state((), GameState)?
+//!         .build(GameDataBuilder::default())?;
+//!
 //!     game.run();
+//!     Ok(())
 //! }
 //! ```
 
@@ -66,8 +70,7 @@ pub use amethyst_audio as audio;
 pub use amethyst_config as config;
 pub use amethyst_controls as controls;
 pub use amethyst_core as core;
-#[macro_use]
-pub extern crate amethyst_derive as derive;
+pub use amethyst_derive::{self as derive, EventReader, PrefabData, State};
 pub use amethyst_input as input;
 pub use amethyst_locale as locale;
 pub use amethyst_network as network;
@@ -89,16 +92,14 @@ extern crate serde_derive;
 pub use crate::core::{shred, shrev, specs as ecs};
 
 pub use self::{
-    app::{Application, ApplicationBuilder, CoreApplication},
+    app::{Application, ApplicationBuilder, CoreApplication, CoreApplicationBuilder},
     callback_queue::{Callback, CallbackQueue},
     error::{Error, Result},
-    game_data::{DataInit, GameData, GameDataBuilder},
+    game_data::DataInit,
     logger::{start_logger, LevelFilter as LogLevelFilter, Logger, LoggerConfig, StdoutLog},
-    state::{
-        EmptyState, EmptyTrans, SimpleState, SimpleTrans, State, StateData, StateMachine, Trans,
-        TransEvent,
-    },
+    state::{GlobalHandler, StateHandler},
     state_event::{StateEvent, StateEventReader},
+    trans::{Trans, TransEvent},
 };
 
 #[doc(hidden)]
@@ -111,5 +112,6 @@ mod callback_queue;
 mod error;
 mod game_data;
 mod logger;
-mod state;
+pub mod state;
 mod state_event;
+mod trans;

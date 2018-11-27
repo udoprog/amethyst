@@ -58,8 +58,10 @@ fn main() -> amethyst::Result<()> {
         )
         .with(systems::WinnerSystem, "winner_system", &["ball_system"]);
 
-    let mut game = Application::new(assets_dir, Pong, game_data)?;
-    game.run();
+    let mut game = Application::build(assets_dir)?
+        .with_state((), Pong)?
+        .build(game_data)?;
 
+    game.run();
     Ok(())
 }

@@ -17,12 +17,12 @@ type MyPrefabData = BasicScenePrefab<Vec<PosNormTex>>;
 
 struct ExampleState;
 
-impl SimpleState for ExampleState {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        let prefab_handle = data.world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
+impl<S, E> StateHandler<S, E> for ExampleState {
+    fn on_start(&mut self, world: &mut World) {
+        let prefab_handle = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
             loader.load("prefab/fly_camera.ron", RonFormat, (), ())
         });
-        data.world
+        world
             .create_entity()
             .named("Fly Camera Scene")
             .with(prefab_handle)
@@ -59,7 +59,12 @@ fn main() -> Result<(), Error> {
             InputBundle::<String, String>::new().with_bindings_from_file(&key_bindings_path)?,
         )?
         .with_basic_renderer(display_config_path, DrawShaded::<PosNormTex>::new(), false)?;
-    let mut game = Application::build(resources_directory, ExampleState)?.build(game_data)?;
+
+    let mut game = Application::build(resources_directory)?
+        .with_defaults()
+        .with_state((), ExampleState)?
+        .build(game_data)?;
+
     game.run();
     Ok(())
 }

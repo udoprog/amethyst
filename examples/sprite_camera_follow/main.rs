@@ -124,9 +124,8 @@ fn init_camera(world: &mut World, parent: Entity) {
 
 struct Example;
 
-impl SimpleState for Example {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        let world = data.world;
+impl<S, E> StateHandler<S, E> for Example {
+    fn on_start(&mut self, world: &mut World) {
         let circle_sprite_sheet_handle =
             load_sprite_sheet(world, "Circle_Spritesheet.png", "Circle_Spritesheet.ron");
         let background_sprite_sheet_handle =
@@ -170,7 +169,10 @@ fn main() -> amethyst::Result<()> {
                 .with_sprite_visibility_sorting(&[]), // Let's us use the `Transparent` component
         )?;
 
-    let mut game = Application::build(root, Example)?.build(game_data)?;
+    let mut game = Application::build(root)?
+        .with_state((), Example)?
+        .build(game_data)?;
+
     game.run();
     Ok(())
 }

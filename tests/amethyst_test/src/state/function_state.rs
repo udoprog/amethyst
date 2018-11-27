@@ -1,7 +1,5 @@
 use amethyst::prelude::*;
 
-use crate::GameUpdate;
-
 /// Runs a function in `.update()` then `Pop`s itself.
 ///
 /// The function is run before `GameUpdate#update(world)` is called.
@@ -14,17 +12,24 @@ where
     function: F,
 }
 
-impl<F, T, E> State<T, E> for FunctionState<F>
+impl<F, S, E> GlobalHandler<S, E> for FunctionState<F>
 where
     F: Fn(&mut World),
-    T: GameUpdate,
     E: Send + Sync + 'static,
 {
-    fn update(&mut self, mut data: StateData<'_, T>) -> Trans<T, E> {
-        data.data.update(&data.world);
+    fn update(&mut self, world: &mut World) -> Trans<S> {
+        (self.function)(world);
+        Trans::Pop
+    }
+}
 
-        (self.function)(&mut data.world);
-
+impl<F, S, E> StateHandler<S, E> for FunctionState<F>
+where
+    F: Fn(&mut World),
+    E: Send + Sync + 'static,
+{
+    fn update(&mut self, world: &mut World) -> Trans<S> {
+        (self.function)(world);
         Trans::Pop
     }
 }

@@ -12,12 +12,12 @@ type MyPrefabData = BasicScenePrefab<Vec<PosNormTangTex>>;
 
 struct Example;
 
-impl SimpleState for Example {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        let handle = data.world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
+impl<S, E> StateHandler<S, E> for Example {
+    fn on_start(&mut self, world: &mut World) {
+        let handle = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
             loader.load("prefab/spotlights_scene.ron", RonFormat, (), ())
         });
-        data.world.create_entity().with(handle).build();
+        world.create_entity().with(handle).build();
     }
 }
 
@@ -37,7 +37,11 @@ fn main() -> amethyst::Result<()> {
         .with(PrefabLoaderSystem::<MyPrefabData>::default(), "", &[])
         .with_bundle(TransformBundle::new())?
         .with_basic_renderer(display_config_path, DrawPbm::<PosNormTangTex>::new(), false)?;
-    let mut game = Application::new(resources, Example, game_data)?;
+
+    let mut game = Application::build(resources)?
+        .with_state((), Example)?
+        .build(game_data)?;
+
     game.run();
     Ok(())
 }

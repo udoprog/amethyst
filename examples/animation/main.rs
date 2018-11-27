@@ -16,6 +16,7 @@ use amethyst::{
     prelude::*,
     renderer::{DrawShaded, ElementState, PosNormTex, VirtualKeyCode},
     utils::{application_root_dir, scene::BasicScenePrefab},
+    State,
 };
 
 type MyPrefabData = (
@@ -28,6 +29,18 @@ enum AnimationId {
     Scale,
     Rotate,
     Translate,
+}
+
+#[derive(State, Clone, Debug, PartialEq, Eq, Hash, Default)]
+struct Custom {
+    name: String,
+}
+
+#[derive(State, Clone, Debug)]
+enum State {
+    Example,
+    Number(u32),
+    Custom(Custom),
 }
 
 struct Example {
@@ -46,9 +59,8 @@ impl Default for Example {
     }
 }
 
-impl SimpleState for Example {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        let StateData { world, .. } = data;
+impl<S> StateHandler<S, StateEvent> for Example {
+    fn on_start(&mut self, world: &mut World) {
         // Initialise the scene with an object, a light and a camera.
         let prefab_handle = world.exec(|loader: PrefabLoader<'_, MyPrefabData>| {
             loader.load("prefab/animation.ron", RonFormat, (), ())
@@ -56,12 +68,7 @@ impl SimpleState for Example {
         self.sphere = Some(world.create_entity().with(prefab_handle).build());
     }
 
-    fn handle_event(
-        &mut self,
-        data: StateData<'_, GameData<'_, '_>>,
-        event: StateEvent,
-    ) -> SimpleTrans {
-        let StateData { world, .. } = data;
+    fn handle_event(&mut self, world: &mut World, event: &StateEvent) -> Trans<S> {
         if let StateEvent::Window(event) = &event {
             if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
                 return Trans::Quit;
@@ -192,9 +199,12 @@ fn main() -> amethyst::Result<()> {
         ))?
         .with_bundle(TransformBundle::new().with_dep(&["sampler_interpolation_system"]))?
         .with_basic_renderer(display_config_path, DrawShaded::<PosNormTex>::new(), false)?;
-    let mut game = Application::new(resources, Example::default(), game_data)?;
-    game.run();
 
+    let mut game = Application::build(resources)?
+        .with_state(State::Example, Example::default())?
+        .build(game_data)?;
+
+    game.run();
     Ok(())
 }
 

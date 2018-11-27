@@ -113,10 +113,8 @@ Finally, let's make sure the code is working as intended by updating the `on_sta
 # fn initialise_camera(world: &mut World) { }
 # fn load_sprite_sheet(world: &mut World) -> SpriteSheetHandle { unimplemented!() }
 # struct MyState;
-# impl SimpleState for MyState {
-fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-    let world = data.world;
-
+# impl<S, E> StateHandler<S, E> for MyState {
+fn on_start(&mut self, world: &mut World) {
     // Load the spritesheet necessary to render the graphics.
     let sprite_sheet_handle = load_sprite_sheet(world);
 

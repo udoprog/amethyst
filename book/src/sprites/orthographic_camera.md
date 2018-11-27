@@ -16,11 +16,11 @@ use amethyst::renderer::{
 #[derive(Debug)]
 struct ExampleState;
 
-impl SimpleState for ExampleState {
-    fn on_start(&mut self, mut data: StateData<'_, GameData<'_, '_>>) {
+impl<S, E> StateHandler<S, E> for ExampleState {
+    fn on_start(&mut self, world: &mut World) {
         // ...
 
-        self.initialize_camera(&mut data.world);
+        self.initialize_camera(world);
     }
 }
 

@@ -19,9 +19,8 @@ use amethyst::{
 
 pub struct Pong;
 
-impl SimpleState for Pong {
-    fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
-        let StateData { world, .. } = data;
+impl<S, E> StateHandler<S, E> for Pong {
+    fn on_start(&mut self, world: &mut World) {
         use crate::audio::initialise_audio;
 
         // Setup our game.

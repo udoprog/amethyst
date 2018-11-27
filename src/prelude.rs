@@ -5,6 +5,7 @@ pub use crate::{
     callback_queue::{Callback, CallbackQueue},
     config::Config,
     core::{SystemExt, WithNamed},
+    dynamic,
     ecs::prelude::{Builder, World},
     game_data::{DataInit, GameData, GameDataBuilder},
     state::{

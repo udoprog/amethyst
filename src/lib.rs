@@ -87,6 +87,8 @@ extern crate rayon;
 extern crate rustc_version_runtime;
 #[macro_use]
 extern crate serde_derive;
+extern crate hashbrown;
+extern crate smallvec;
 
 pub use crate::core::{shred, shrev, specs as ecs};
 
@@ -110,6 +112,7 @@ pub mod prelude;
 
 mod app;
 mod callback_queue;
+pub mod dynamic;
 mod error;
 mod game_data;
 mod logger;

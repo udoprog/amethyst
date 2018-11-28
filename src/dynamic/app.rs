@@ -26,7 +26,10 @@ use crate::{
         timing::{Stopwatch, Time},
         EventReader, Named,
     },
-    dynamic::state::{GlobalCallback, State, StateCallback, StateMachine, Trans, TransEvent},
+    dynamic::{
+        state::{GlobalCallback, State, StateCallback, StateMachine},
+        trans::{Trans, TransEvent},
+    },
     ecs::{
         common::Errors,
         prelude::{Component, Read, World, Write},

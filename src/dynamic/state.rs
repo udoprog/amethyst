@@ -1,6 +1,6 @@
 //! Dynamic utilities for game state management.
 
-use crate::{ecs::prelude::World, error::Error, state::StateError};
+use crate::{dynamic::trans::Trans, ecs::prelude::World, error::Error, state::StateError};
 
 use smallvec::SmallVec;
 
@@ -56,46 +56,6 @@ impl<S, E> StateStorage<S, E> for SingletonStateStorage<S, E> {
 impl<E> State<E> for () {
     type Storage = SingletonStateStorage<Self, E>;
 }
-
-/// Types of state transitions.
-/// `S` is the state this state machine deals with.
-pub enum Trans<S> {
-    /// Continue as normal.
-    None,
-    /// Remove the active state and resume the next state on the stack or stop
-    /// if there are none.
-    Pop,
-    /// Pause the active state and push a new state onto the stack.
-    Push(S),
-    /// Remove the current state on the stack and insert a different one.
-    Switch(S),
-    /// Stop and remove all states and shut down the engine.
-    Quit,
-}
-
-impl<S> Iterator for Trans<S> {
-    type Item = Trans<S>;
-
-    fn next(&mut self) -> Option<Self> {
-        use std::mem;
-
-        // Note: Iterating over `Trans::None` should yield no transitions.
-        if let Trans::None = *self {
-            return None;
-        }
-
-        Some(mem::replace(self, Trans::None))
-    }
-}
-
-/// Event queue to trigger state `Trans` from other places than a `State`'s methods.
-/// # Example:
-/// ```rust, ignore
-/// world.write_resource::<EventChannel<TransEvent<MyGameData, StateEvent>>>().single_write(Box::new(|| Trans::Quit));
-/// ```
-///
-/// Transitions will be executed sequentially by Amethyst's `CoreApplication` update loop.
-pub type TransEvent<S> = Box<dyn Fn() -> Trans<S> + Send + Sync + 'static>;
 
 /// A callback that is registered for all events.
 /// This is typically used for bookkeeping specific things.
@@ -250,7 +210,7 @@ where
     ///
     /// use amethyst::{
     ///     ecs::World,
-    ///     dynamic::state::{Trans, StateMachine, GlobalCallback},
+    ///     dynamic::{state::StateMachine, Trans, GlobalCallback},
     /// };
     /// use std::{
     ///     rc::Rc,
@@ -407,7 +367,7 @@ where
     ///
     /// use amethyst::{
     ///     ecs::World,
-    ///     dynamic::state::{Trans, StateMachine, StateCallback},
+    ///     dynamic::{state::StateMachine, Trans, StateCallback},
     /// };
     /// use std::{
     ///     rc::Rc,
@@ -459,8 +419,8 @@ where
             return;
         }
 
-        // Transitions which have been requested by callbacks.
-        let mut transitions = SmallVec::<[Trans<S>; INLINED_CALLBACKS * 2]>::new();
+        // Transition which have been requested by callbacks.
+        let mut trans = Trans::None;
 
         {
             let StateMachine {
@@ -471,17 +431,15 @@ where
             } = *self;
 
             if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s).as_mut()) {
-                transitions.extend(c.handle_event(world, &event));
+                trans.update(c.handle_event(world, &event));
             }
 
             for c in global_callbacks {
-                transitions.extend(c.handle_event(world, &event));
+                trans.update(c.handle_event(world, &event));
             }
         }
 
-        for trans in transitions {
-            self.transition(trans, world);
-        }
+        self.transition(trans, world);
     }
 
     /// Updates the currently active state at a steady, fixed interval.
@@ -490,8 +448,8 @@ where
             return;
         }
 
-        // Transitions which have been requested by callbacks.
-        let mut transitions = SmallVec::<[Trans<S>; INLINED_CALLBACKS * 2]>::new();
+        // Transition which have been requested by callbacks.
+        let mut trans = Trans::None;
 
         {
             let StateMachine {
@@ -502,22 +460,20 @@ where
             } = *self;
 
             if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s).as_mut()) {
-                transitions.extend(c.fixed_update(world));
+                trans.update(c.fixed_update(world));
             }
 
             // Fixed shadow updates for all states.
             callbacks.do_values(|c| {
-                transitions.extend(c.shadow_fixed_update(world));
+                trans.update(c.shadow_fixed_update(world));
             });
 
             for c in global_callbacks {
-                transitions.extend(c.fixed_update(world));
+                trans.update(c.fixed_update(world));
             }
         }
 
-        for trans in transitions {
-            self.transition(trans, world);
-        }
+        self.transition(trans, world);
     }
 
     /// Updates the currently active state immediately.
@@ -526,8 +482,8 @@ where
             return;
         }
 
-        // Transitions which have been requested by callbacks.
-        let mut transitions = SmallVec::<[Trans<S>; INLINED_CALLBACKS * 2]>::new();
+        // Transition which have been requested by callbacks.
+        let mut trans = Trans::None;
 
         {
             let StateMachine {
@@ -538,23 +494,21 @@ where
             } = *self;
 
             if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s).as_mut()) {
-                transitions.extend(c.update(world));
+                trans.update(c.update(world));
             }
 
             // Shadow updates for all states.
             callbacks.do_values(|c| {
-                transitions.extend(c.shadow_update(world));
+                trans.update(c.shadow_update(world));
             });
 
             // Regular update for global callbacks.
             for c in global_callbacks {
-                transitions.extend(c.update(world));
+                trans.update(c.update(world));
             }
         }
 
-        for trans in transitions {
-            self.transition(trans, world);
-        }
+        self.transition(trans, world);
     }
 
     /// Performs a state transition.

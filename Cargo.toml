@@ -81,7 +81,6 @@ winit = { version = "0.18", features = ["serde"] }
 serde = "1.0"
 serde_derive = "1.0"
 smallvec = "0.6"
-hashbrown = "0.1"
 
 thread_profiler = { version = "0.3", optional = true }
 

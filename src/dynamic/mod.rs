@@ -4,4 +4,4 @@ pub mod app;
 pub mod state;
 
 pub use self::app::{Application, ApplicationBuilder};
-pub use self::state::{GlobalCallback, StateCallback, Trans};
+pub use self::state::{GlobalCallback, State, StateCallback, StateStorage, Trans};

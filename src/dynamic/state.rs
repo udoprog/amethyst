@@ -2,9 +2,60 @@
 
 use crate::{ecs::prelude::World, error::Error, state::StateError};
 
-use hashbrown::{hash_map, HashMap};
 use smallvec::SmallVec;
-use std::hash::Hash;
+
+/// The trait associated with a stage.
+pub trait State<E>
+where
+    Self: Sized,
+{
+    /// The storage used for storing callbacks for the given state.
+    type Storage: Default + StateStorage<Self, E>;
+}
+
+/// Provides access to storage for states.
+pub trait StateStorage<S, E>
+where
+    Self: Sized,
+{
+    /// Get mutable storage for the given state.
+    fn get_mut(&mut self, value: &S) -> &mut Option<Box<dyn StateCallback<S, E>>>;
+
+    /// Apply the specified function to all values.
+    fn do_values<F>(&mut self, apply: F)
+    where
+        F: FnMut(&mut Box<dyn StateCallback<S, E>>);
+}
+
+/// Storage implementation for types which only have one value.
+pub struct SingletonStateStorage<S, E> {
+    callback: Option<Box<dyn StateCallback<S, E>>>,
+}
+
+impl<S, E> Default for SingletonStateStorage<S, E> {
+    fn default() -> Self {
+        SingletonStateStorage { callback: None }
+    }
+}
+
+impl<S, E> StateStorage<S, E> for SingletonStateStorage<S, E> {
+    fn get_mut(&mut self, _: &S) -> &mut Option<Box<dyn StateCallback<S, E>>> {
+        &mut self.callback
+    }
+
+    fn do_values<F>(&mut self, mut apply: F)
+    where
+        F: FnMut(&mut Box<dyn StateCallback<S, E>>),
+    {
+        if let Some(c) = self.callback.as_mut() {
+            apply(c);
+        }
+    }
+}
+
+impl<E> State<E> for () {
+    type Storage = SingletonStateStorage<Self, E>;
+}
 
 /// Types of state transitions.
 /// `S` is the state this state machine deals with.
@@ -134,14 +185,17 @@ type GlobalCallbacks<S, E> = SmallVec<[Box<dyn GlobalCallback<S, E>>; INLINED_CA
 /// A simple stack-based state machine (pushdown automaton).
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct StateMachine<S, E> {
+pub struct StateMachine<S, E>
+where
+    S: State<E>,
+{
     running: bool,
     /// The stack of the state machine.
     #[derivative(Debug = "ignore")]
     stack: Vec<S>,
     /// Callbacks fired on particular states.
     #[derivative(Debug = "ignore")]
-    callbacks: HashMap<S, Box<dyn StateCallback<S, E>>>,
+    callbacks: S::Storage,
     /// Callbacks fired on any state.
     #[derivative(Debug = "ignore")]
     global_callbacks: GlobalCallbacks<S, E>,
@@ -149,7 +203,7 @@ pub struct StateMachine<S, E> {
 
 impl<S, E> StateMachine<S, E>
 where
-    S: PartialEq + Eq + Hash,
+    S: State<E>,
 {
     /// Creates a new state machine with the given initial state.
     pub fn new(initial_state: S) -> StateMachine<S, E> {
@@ -166,15 +220,14 @@ where
     where
         C: StateCallback<S, E>,
     {
-        match self.callbacks.entry(state) {
-            hash_map::Entry::Occupied(_) => {
-                return Err(Error::StateMachine(StateError::CallbackConflict))
-            }
-            hash_map::Entry::Vacant(e) => {
-                e.insert(Box::new(callback));
-                Ok(())
-            }
+        let s = self.callbacks.get_mut(&state);
+
+        if s.is_some() {
+            return Err(Error::StateMachine(StateError::CallbackConflict));
         }
+
+        *s = Some(Box::new(callback));
+        Ok(())
     }
 
     /// Register a global callback that is called on any state.
@@ -193,6 +246,8 @@ where
     /// # Examples
     ///
     /// ```
+    /// # #[macro_use] extern crate amethyst;
+    ///
     /// use amethyst::{
     ///     ecs::World,
     ///     dynamic::state::{Trans, StateMachine, GlobalCallback},
@@ -202,7 +257,7 @@ where
     ///     cell::RefCell,
     /// };
     ///
-    /// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    /// #[derive(State, Debug)]
     /// enum State {
     ///     First,
     ///     Second,
@@ -294,12 +349,13 @@ where
     /// # Examples
     ///
     /// ```
+    /// # #[macro_use] extern crate amethyst;
     /// use amethyst::{
     ///     ecs::World,
     ///     dynamic::state::StateMachine,
     /// };
     ///
-    /// #[derive(Clone, PartialEq, Eq, Hash)]
+    /// #[derive(State, Debug)]
     /// enum State {
     ///     First,
     ///     Second,
@@ -331,7 +387,7 @@ where
             .last()
             .ok_or_else(|| Error::StateMachine(StateError::NoStatesPresent))?;
 
-        if let Some(c) = self.callbacks.get_mut(state) {
+        if let Some(c) = self.callbacks.get_mut(state).as_mut() {
             c.on_start(world);
         }
 
@@ -347,6 +403,8 @@ where
     /// # Examples
     ///
     /// ```
+    /// # #[macro_use] extern crate amethyst;
+    ///
     /// use amethyst::{
     ///     ecs::World,
     ///     dynamic::state::{Trans, StateMachine, StateCallback},
@@ -356,7 +414,7 @@ where
     ///     cell::RefCell,
     /// };
     ///
-    /// #[derive(Clone, PartialEq, Eq, Hash)]
+    /// #[derive(State, Debug)]
     /// enum State {
     ///     First,
     ///     Second,
@@ -412,7 +470,7 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s).as_mut()) {
                 transitions.extend(c.handle_event(world, &event));
             }
 
@@ -443,13 +501,14 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s).as_mut()) {
                 transitions.extend(c.fixed_update(world));
             }
 
-            for c in callbacks.values_mut() {
+            // Fixed shadow updates for all states.
+            callbacks.do_values(|c| {
                 transitions.extend(c.shadow_fixed_update(world));
-            }
+            });
 
             for c in global_callbacks {
                 transitions.extend(c.fixed_update(world));
@@ -478,14 +537,14 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s).as_mut()) {
                 transitions.extend(c.update(world));
             }
 
-            // Shadow updates for other states.
-            for c in callbacks.values_mut() {
+            // Shadow updates for all states.
+            callbacks.do_values(|c| {
                 transitions.extend(c.shadow_update(world));
-            }
+            });
 
             // Regular update for global callbacks.
             for c in global_callbacks {
@@ -519,11 +578,15 @@ where
             return;
         }
 
-        if let Some(c) = self.stack.pop().and_then(|s| self.callbacks.get_mut(&s)) {
+        if let Some(c) = self
+            .stack
+            .pop()
+            .and_then(|s| self.callbacks.get_mut(&s).as_mut())
+        {
             c.on_stop(world);
         }
 
-        if let Some(c) = self.callbacks.get_mut(&state) {
+        if let Some(c) = self.callbacks.get_mut(&state).as_mut() {
             c.on_start(world);
         }
 
@@ -546,11 +609,11 @@ where
             ..
         } = *self;
 
-        if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
+        if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s).as_mut()) {
             c.on_pause(world);
         }
 
-        if let Some(c) = callbacks.get_mut(&state) {
+        if let Some(c) = callbacks.get_mut(&state).as_mut() {
             c.on_start(world);
         }
 
@@ -573,13 +636,13 @@ where
             None => return,
         };
 
-        if let Some(c) = self.callbacks.get_mut(&head) {
+        if let Some(c) = self.callbacks.get_mut(&head).as_mut() {
             c.on_stop(world);
         }
 
         match self.stack.last() {
             Some(current) => {
-                if let Some(c) = self.callbacks.get_mut(current) {
+                if let Some(c) = self.callbacks.get_mut(current).as_mut() {
                     c.on_resume(world);
                 }
 
@@ -603,7 +666,11 @@ where
             return;
         }
 
-        while let Some(c) = self.stack.pop().and_then(|s| self.callbacks.get_mut(&s)) {
+        while let Some(c) = self
+            .stack
+            .pop()
+            .and_then(|s| self.callbacks.get_mut(&s).as_mut())
+        {
             c.on_stop(world);
         }
 

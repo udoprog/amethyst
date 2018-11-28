@@ -1,9 +1,6 @@
 //! The core engine framework.
 
-use std::{
-    error::Error as StdError, hash::Hash, marker::PhantomData, path::Path, sync::Arc,
-    time::Duration,
-};
+use std::{error::Error as StdError, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     core::{
@@ -29,7 +26,7 @@ use crate::{
         timing::{Stopwatch, Time},
         EventReader, Named,
     },
-    dynamic::state::{GlobalCallback, StateCallback, StateMachine, Trans, TransEvent},
+    dynamic::state::{GlobalCallback, State, StateCallback, StateMachine, Trans, TransEvent},
     ecs::{
         common::Errors,
         prelude::{Component, Read, World, Write},
@@ -124,7 +121,7 @@ pub type ApplicationBuilder<S> = CoreApplicationBuilder<S, StateEvent, StateEven
 #[derivative(Debug)]
 pub struct CoreApplication<S, E = StateEvent, R = StateEventReader>
 where
-    S: 'static,
+    S: 'static + State<E>,
     E: 'static,
 {
     /// The world
@@ -141,10 +138,10 @@ where
     ignore_window_close: bool,
 }
 
-impl<S, E, R> CoreApplication<S, E, R>
+impl<S> CoreApplication<S, StateEvent, StateEventReader>
 where
-    S: 'static + Send + Sync + Clone + PartialEq + Eq + Hash,
-    E: Clone + Send + Sync + 'static,
+    S: State<StateEvent>,
+    S: 'static + Clone + Send + Sync,
 {
     /// Creates a new Application with the given initial game state.
     /// This will create and allocate all the needed resources for
@@ -179,8 +176,6 @@ where
     pub fn new<P>(path: P, initial_state: S) -> Result<Application<S>>
     where
         P: AsRef<Path>,
-        for<'event> R: EventReader<'event, Event = E>,
-        R: Default,
     {
         Self::build(path, initial_state)?.build()
     }
@@ -192,11 +187,17 @@ where
     pub fn build<P>(path: P, initial_state: S) -> Result<ApplicationBuilder<S>>
     where
         P: AsRef<Path>,
-        for<'event> R: EventReader<'event, Event = E>,
     {
         CoreApplicationBuilder::new(path, initial_state)
     }
+}
 
+impl<S, E, R> CoreApplication<S, E, R>
+where
+    S: State<E>,
+    S: 'static + Clone + Send + Sync,
+    E: 'static + Clone + Send + Sync,
+{
     /// Run the gameloop until the game state indicates that the game is no
     /// longer running. This is done via the `State` returning `Trans::Quit` or
     /// `Trans::Pop` on the last state in from the stack. See full
@@ -380,7 +381,10 @@ impl<S, E, R> Drop for CoreApplication<'_, '_, S, E, R> {
 /// `CoreApplicationBuilder` is an interface that allows for creation of an
 /// [`Application`](struct.Application.html) using a custom set of configuration.
 /// This is the typical way an [`Application`](struct.Application.html) object is created.
-pub struct CoreApplicationBuilder<S, E = StateEvent, R = StateEventReader> {
+pub struct CoreApplicationBuilder<S, E = StateEvent, R = StateEventReader>
+where
+    S: State<E>,
+{
     /// Used by bundles to access the world directly
     pub world: World,
     ignore_window_close: bool,
@@ -391,7 +395,7 @@ pub struct CoreApplicationBuilder<S, E = StateEvent, R = StateEventReader> {
 
 impl<S> CoreApplicationBuilder<S, StateEvent, StateEventReader>
 where
-    S: PartialEq + Eq + Hash,
+    S: State<StateEvent>,
 {
     /// Register default event handlers.
     pub fn with_defaults(mut self) -> Self {
@@ -422,7 +426,7 @@ where
 
 impl<S, E, R> CoreApplicationBuilder<S, E, R>
 where
-    S: 'static + Send + Sync + Clone + PartialEq + Eq + Hash,
+    S: 'static + Clone + Send + Sync + State<E>,
 {
     /// Creates a new [ApplicationBuilder](struct.ApplicationBuilder.html) instance
     /// that wraps the initial_state. This is the more verbose way of initializing
@@ -894,12 +898,14 @@ where
     /// # Examples
     ///
     /// ```no_run
+    /// # #[macro_use] extern crate amethyst;
+    ///
     /// use amethyst::prelude::dynamic::{StateCallback, Application};
     /// use amethyst::assets::{Directory, Loader};
     /// use amethyst::renderer::ObjFormat;
     /// use amethyst::ecs::prelude::World;
     ///
-    /// #[derive(Clone, PartialEq, Eq, Hash)]
+    /// #[derive(State, Debug, Clone)]
     /// pub enum State {
     ///     Loading,
     /// }

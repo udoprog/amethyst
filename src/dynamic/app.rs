@@ -104,10 +104,12 @@ use crate::{
 /// ```
 ///
 /// [log]: https://crates.io/crates/log
-pub type Application<S> = CoreApplication<S, StateEvent, StateEventReader>;
+pub type Application<'res, 'threadlocal, S> =
+    CoreApplication<'res, 'threadlocal, S, StateEvent, StateEventReader>;
 
 /// The builder of an [Application](struct.Application.html) with default Event parameters.
-pub type ApplicationBuilder<S> = CoreApplicationBuilder<S, StateEvent, StateEventReader>;
+pub type ApplicationBuilder<'res, 'threadlocal, S> =
+    CoreApplicationBuilder<'res, 'threadlocal, S, StateEvent, StateEventReader>;
 
 /// `CoreApplication` is the application implementation for the game engine. This is fully generic
 /// over the state type and event type.
@@ -122,7 +124,7 @@ pub type ApplicationBuilder<S> = CoreApplicationBuilder<S, StateEvent, StateEven
 /// - `R`: `EventReader` implementation for the given event type `E`
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CoreApplication<S, E = StateEvent, R = StateEventReader>
+pub struct CoreApplication<'res, 'threadlocal, S, E = StateEvent, R = StateEventReader>
 where
     S: 'static + State<E>,
     E: 'static,
@@ -139,9 +141,11 @@ where
     trans_reader_id: ReaderId<TransEvent<S>>,
     states: StateMachine<S, E>,
     ignore_window_close: bool,
+    #[derivative(Debug = "ignore")]
+    dispatcher: Dispatcher<'res, 'threadlocal>,
 }
 
-impl<S> CoreApplication<S, StateEvent, StateEventReader>
+impl<'res, 'threadlocal, S> CoreApplication<'res, 'threadlocal, S, StateEvent, StateEventReader>
 where
     S: State<StateEvent>,
     S: 'static + Clone + Send + Sync,
@@ -176,7 +180,7 @@ where
     ///
     /// Application will return an error if the internal thread pool fails
     /// to initialize correctly because of systems resource limitations
-    pub fn new<P>(path: P, initial_state: S) -> Result<Application<S>>
+    pub fn new<P>(path: P, initial_state: S) -> Result<Application<'res, 'threadlocal, S>>
     where
         P: AsRef<Path>,
     {
@@ -187,7 +191,7 @@ where
     ///
     /// This is identical in function to
     /// [ApplicationBuilder::new](struct.ApplicationBuilder.html#method.new).
-    pub fn build<P>(path: P, initial_state: S) -> Result<ApplicationBuilder<S>>
+    pub fn build<P>(path: P, initial_state: S) -> Result<ApplicationBuilder<'res, 'threadlocal, S>>
     where
         P: AsRef<Path>,
     {
@@ -195,7 +199,7 @@ where
     }
 }
 
-impl<S, E, R> CoreApplication<S, E, R>
+impl<'res, 'threadlocal, S, E, R> CoreApplication<'res, 'threadlocal, S, E, R>
 where
     S: State<E>,
     S: 'static + Clone + Send + Sync,
@@ -350,6 +354,7 @@ where
 
             #[cfg(feature = "profiler")]
             profile_scope!("update");
+            self.dispatcher.dispatch(&self.world.res);
             self.states.update(&mut self.world);
         }
 
@@ -384,7 +389,7 @@ impl<S, E, R> Drop for CoreApplication<'_, '_, S, E, R> {
 /// `CoreApplicationBuilder` is an interface that allows for creation of an
 /// [`Application`](struct.Application.html) using a custom set of configuration.
 /// This is the typical way an [`Application`](struct.Application.html) object is created.
-pub struct CoreApplicationBuilder<S, E = StateEvent, R = StateEventReader>
+pub struct CoreApplicationBuilder<'res, 'threadlocal, S, E = StateEvent, R = StateEventReader>
 where
     S: State<E>,
 {
@@ -392,11 +397,12 @@ where
     pub world: World,
     ignore_window_close: bool,
     states: StateMachine<S, E>,
-    disp_builder: DispatcherBuilder<'static, 'static>,
+    disp_builder: DispatcherBuilder<'res, 'threadlocal>,
     phantom: PhantomData<R>,
 }
 
-impl<S> CoreApplicationBuilder<S, StateEvent, StateEventReader>
+impl<'res, 'threadlocal, S>
+    CoreApplicationBuilder<'res, 'threadlocal, S, StateEvent, StateEventReader>
 where
     S: State<StateEvent>,
 {
@@ -427,7 +433,7 @@ where
     }
 }
 
-impl<S, E, R> CoreApplicationBuilder<S, E, R>
+impl<'res, 'threadlocal, S, E, R> CoreApplicationBuilder<'res, 'threadlocal, S, E, R>
 where
     S: 'static + Clone + Send + Sync + State<E>,
 {
@@ -568,7 +574,7 @@ where
     /// use amethyst::ecs::prelude::System;
     ///
     /// struct NopSystem;
-    /// impl<'a> System<'a> for NopSystem {
+    /// impl<'r> System<'r> for NopSystem {
     ///     type SystemData = ();
     ///     fn run(&mut self, (): Self::SystemData) {}
     /// }
@@ -627,7 +633,7 @@ where
     /// use amethyst::ecs::prelude::System;
     ///
     /// struct NopSystem;
-    /// impl<'a> System<'a> for NopSystem {
+    /// impl<'r> System<'r> for NopSystem {
     ///     type SystemData = ();
     ///     fn run(&mut self, _: Self::SystemData) {}
     /// }
@@ -646,7 +652,7 @@ where
     /// ```
     pub fn with<T>(mut self, system: T, name: &str, dependencies: &[&str]) -> Self
     where
-        for<'res> T: 'static + System<'res> + Send,
+        for<'r> T: 'static + System<'r> + Send,
     {
         self.disp_builder.add(system, name, dependencies);
         self
@@ -683,7 +689,7 @@ where
     /// };
     ///
     /// struct NopSystem;
-    /// impl<'a> System<'a> for NopSystem {
+    /// impl<'r> System<'r> for NopSystem {
     ///     type SystemData = ();
     ///
     ///     fn run(&mut self, _: Self::SystemData) {}
@@ -698,7 +704,7 @@ where
     /// ```
     pub fn with_thread_local<T>(mut self, system: T) -> Self
     where
-        for<'res> T: 'static + System<'res>,
+        for<'r> T: 'static + System<'r>,
     {
         self.disp_builder.add_thread_local(system);
         self
@@ -725,7 +731,7 @@ where
     ///
     pub fn with_bundle<B>(mut self, bundle: B) -> Result<Self>
     where
-        B: SystemBundle<'static, 'static>,
+        B: SystemBundle<'res, 'threadlocal>,
     {
         bundle.build(&mut self.disp_builder).map_err(Error::Core)?;
         Ok(self)
@@ -1029,7 +1035,7 @@ where
     ///
     /// See the [example show for `ApplicationBuilder::new()`](struct.ApplicationBuilder.html#examples)
     /// for an example on how this method is used.
-    pub fn build(self) -> Result<CoreApplication<S, E, R>>
+    pub fn build(self) -> Result<CoreApplication<'res, 'threadlocal, S, E, R>>
     where
         E: Clone + Send + Sync + 'static,
         R: Default,
@@ -1060,7 +1066,7 @@ where
         let mut dispatcher = disp_builder.build();
         dispatcher.setup(&mut world.res);
 
-        states.register_global_callback(ApplicationCallback(dispatcher));
+        states.register_global_callback(UpdateState);
 
         return Ok(CoreApplication {
             world,
@@ -1070,19 +1076,15 @@ where
             trans_reader_id,
             states,
             ignore_window_close: self.ignore_window_close,
+            dispatcher,
         });
 
-        pub struct ApplicationCallback(Dispatcher<'static, 'static>);
+        pub struct UpdateState;
 
-        impl<S, E> GlobalCallback<S, E> for ApplicationCallback
+        impl<S, E> GlobalCallback<S, E> for UpdateState
         where
             S: 'static + Send + Sync + Clone,
         {
-            fn update(&mut self, world: &mut World) -> Trans<S> {
-                self.0.dispatch(&world.res);
-                Trans::None
-            }
-
             /// State changed.
             fn changed(&mut self, world: &mut World, state: &S) {
                 *world.write_resource::<S>() = state.clone();

@@ -47,15 +47,15 @@ impl<'a, 'b> CustomDispatcherState<'a, 'b> {
     }
 }
 
-impl<'a, 'b, S, E> GlobalCallback<S, E> for CustomDispatcherState<'a, 'b>
+impl<'a, 'b, S, E> StateCallback<S, E> for CustomDispatcherState<'a, 'b>
 where
     E: Send + Sync + 'static,
 {
-    fn started(&mut self, world: &mut World) {
+    fn on_start(&mut self, world: &mut World) {
         self.initialize_dispatcher(world);
     }
 
-    fn stopped(&mut self, _: &mut World) {
+    fn on_stop(&mut self, _: &mut World) {
         self.terminate_dispatcher();
     }
 

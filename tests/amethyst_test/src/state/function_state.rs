@@ -22,3 +22,14 @@ where
         Trans::Pop
     }
 }
+
+impl<F, S, E> StateCallback<S, E> for FunctionState<F>
+where
+    F: Fn(&mut World),
+    E: Send + Sync + 'static,
+{
+    fn update(&mut self, world: &mut World) -> Trans<S> {
+        (self.function)(world);
+        Trans::Pop
+    }
+}

@@ -21,8 +21,12 @@ use amethyst::{
 };
 use boxfnonce::SendBoxFnOnce;
 use hetseq::Queue;
+use std::collections::VecDeque;
 
-use crate::{CustomDispatcherStateBuilder, FunctionState, SequencerState, SystemInjectionBundle};
+use crate::{
+    state::sequencer::{Step, WorldFn},
+    CustomDispatcherStateBuilder, Sequencer, SystemInjectionBundle,
+};
 
 type BundleAddFn = SendBoxFnOnce<
     'static,
@@ -44,8 +48,6 @@ type BundleAddFn = SendBoxFnOnce<
 type FnResourceAdd = Box<FnMut(&mut World) + Send>;
 /// Constructs a registered state.
 type FnStateAdd<S, E> = SendBoxFnOnce<'static, (), Box<StateCallback<S, E>>>;
-/// Constructs a registered global.
-type FnGlobalAdd<S, E> = SendBoxFnOnce<'static, (), Box<GlobalCallback<S, E>>>;
 
 type DefaultPipeline = PipelineBuilder<
     Queue<(
@@ -97,8 +99,9 @@ pub struct AmethystApplication<S, E, R> {
     /// States to run, in user specified order.
     #[derivative(Debug = "ignore")]
     states: Vec<(S, FnStateAdd<S, E>)>,
+    /// Functions to call, one after another.
     #[derivative(Debug = "ignore")]
-    globals: Vec<FnGlobalAdd<S, E>>,
+    functions: VecDeque<WorldFn<S>>,
     /// Game data and event type.
     state_data: PhantomData<R>,
     /// Whether or not this application uses the `RenderBundle`.
@@ -107,7 +110,7 @@ pub struct AmethystApplication<S, E, R> {
 
 impl<S> AmethystApplication<S, StateEvent, StateEventReader>
 where
-    S: 'static + State<StateEvent>,
+    S: 'static + Send + Sync + Clone + State<StateEvent>,
 {
     /// Returns an Amethyst application without any bundles.
     pub fn blank() -> AmethystApplication<S, StateEvent, StateEventReader> {
@@ -115,7 +118,7 @@ where
             bundle_add_fns: Vec::new(),
             resource_add_fns: Vec::new(),
             states: Vec::new(),
-            globals: Vec::new(),
+            functions: VecDeque::new(),
             state_data: PhantomData,
             render: false,
         }
@@ -179,7 +182,7 @@ impl<S, E, R> AmethystApplication<S, E, R> {
 
 impl<S, E, R> AmethystApplication<S, E, R>
 where
-    S: 'static + State<E> + Clone + Default + Send + Sync,
+    S: 'static + Clone + Default + Send + Sync + State<E>,
     E: 'static + Clone + Send + Sync,
     R: Default,
 {
@@ -202,7 +205,7 @@ where
             self.bundle_add_fns,
             self.resource_add_fns,
             self.states,
-            self.globals,
+            self.functions,
         )
     }
 
@@ -217,7 +220,7 @@ where
         bundle_add_fns: Vec<BundleAddFn>,
         resource_add_fns: Vec<FnResourceAdd>,
         states: Vec<(S, FnStateAdd<S, E>)>,
-        globals: Vec<FnGlobalAdd<S, E>>,
+        functions: VecDeque<WorldFn<S>>,
     ) -> Result<CoreApplication<'static, 'static, S, E, R>>
     where
         for<'b> R: EventReader<'b, Event = E>,
@@ -229,14 +232,14 @@ where
             },
         )?;
 
-        Self::build_application(game_data, resource_add_fns, states, globals)
+        Self::build_application(game_data, resource_add_fns, states, functions)
     }
 
     fn build_application(
         game_data: GameDataBuilder<'static, 'static>,
         resource_add_fns: Vec<FnResourceAdd>,
         states: Vec<(S, FnStateAdd<S, E>)>,
-        globals: Vec<FnGlobalAdd<S, E>>,
+        functions: VecDeque<WorldFn<S>>,
     ) -> Result<CoreApplication<'static, 'static, S, E, R>>
     where
         for<'b> R: EventReader<'b, Event = E>,
@@ -245,21 +248,13 @@ where
 
         let mut application_builder = CoreApplication::build(Self::assets_dir(), initial_state)?;
 
-        let mut sequenced_states = Vec::new();
-
         for (state, callback) in states {
             let callback = callback.call();
-            sequenced_states.push(state.clone());
             application_builder = application_builder.with_boxed_state(state, callback)?;
         }
 
-        for callback in globals {
-            let global = callback.call();
-            application_builder = application_builder.with_boxed_global(global);
-        }
-
-        application_builder =
-            application_builder.with_global(SequencerState::new(sequenced_states));
+        // Calls to perform once.
+        application_builder = application_builder.with_global(Sequencer::new(functions));
 
         {
             let world = &mut application_builder.world;
@@ -283,7 +278,7 @@ where
             bundle_add_fns,
             resource_add_fns,
             states,
-            globals,
+            functions,
             render,
             ..
         } = self;
@@ -307,11 +302,11 @@ where
                 //
                 // * <https://github.com/tomaka/glutin/issues/1034> can still happen
                 // * <https://github.com/tomaka/glutin/issues/1038> may be completely removed
-                Self::build_internal(bundle_add_fns, resource_add_fns, states, globals)?.run();
+                Self::build_internal(bundle_add_fns, resource_add_fns, states, functions)?.run();
 
                 drop(guard);
             } else {
-                Self::build_internal(bundle_add_fns, resource_add_fns, states, globals)?.run();
+                Self::build_internal(bundle_add_fns, resource_add_fns, states, functions)?.run();
             }
 
             Ok(())
@@ -322,7 +317,7 @@ where
 
 impl<S, E, R> AmethystApplication<S, E, R>
 where
-    S: 'static + State<E>,
+    S: 'static + Clone + Send + Sync + State<E>,
     E: 'static + Send + Sync,
 {
     /// Use the specified custom event type instead of `()`.
@@ -350,8 +345,8 @@ where
         AmethystApplication {
             bundle_add_fns: self.bundle_add_fns,
             resource_add_fns: self.resource_add_fns,
-            states: Vec::new(),
-            globals: Vec::new(),
+            states: Default::default(),
+            functions: Default::default(),
             state_data: PhantomData,
             render: self.render,
         }
@@ -488,6 +483,11 @@ where
     }
 
     /// Register a callback associated with a specific state.
+    ///
+    /// # Arguments
+    ///
+    /// - `state`: State that callback is associated with.
+    /// - `callback`: Callback to associate with state.
     pub fn with_state<C: 'static>(self, state: S, callback: C) -> Self
     where
         C: StateCallback<S, E> + Send + Sync,
@@ -506,26 +506,6 @@ where
             SendBoxFnOnce::from(move || Box::new(callback()) as Box<StateCallback<S, E>>),
         ));
 
-        self
-    }
-
-    /// Register a global callback associated with all states.
-    pub fn with_global<C: 'static>(self, callback: C) -> Self
-    where
-        C: GlobalCallback<S, E> + Send + Sync,
-    {
-        self.with_global_fn(move || callback)
-    }
-
-    /// Register a global callback associated with all states with a callback that is `!Send`.
-    pub fn with_global_fn<T: 'static, C: 'static>(mut self, callback: C) -> Self
-    where
-        C: FnOnce() -> T + Send + Sync,
-        T: GlobalCallback<S, E>,
-    {
-        self.globals.push(SendBoxFnOnce::from(move || {
-            Box::new(callback()) as Box<GlobalCallback<S, E>>
-        }));
         self
     }
 
@@ -559,7 +539,7 @@ where
     /// * `system`: The `System` to register.
     /// * `name`: Name to register the system with, used for dependency ordering.
     /// * `deps`: Names of systems that must run before this system.
-    pub fn with_system_single<N, Sys>(self, system: Sys, name: N, deps: &[N]) -> Self
+    pub fn with_state_system<N, Sys>(self, state: S, system: Sys, name: N, deps: &[N]) -> Self
     where
         N: Into<String> + Clone,
         Sys: for<'sys_local> System<'sys_local> + Send + Sync + 'static,
@@ -571,7 +551,7 @@ where
             .map(|dep| dep.clone().into())
             .collect::<Vec<String>>();
 
-        self.with_global_fn(move || {
+        self.with_state_fn(state, move || {
             CustomDispatcherStateBuilder::new()
                 .with(
                     system,
@@ -581,58 +561,53 @@ where
         })
     }
 
-    /// Registers a function to run in the `World`.
+    /// Switches to the given state in the sequence.
     ///
     /// # Parameters
     ///
-    /// * `func`: Function to execute.
-    pub fn with_fn<F>(self, func: F) -> Self
-    where
-        F: Fn(&mut World) + Send + Sync + 'static,
-    {
-        self.with_global_fn(move || FunctionState::new(func))
+    /// * `state`: State to switch to.
+    pub fn do_state(self, state: S) -> Self {
+        self.do_fn(move |_| Step::Trans(Trans::Switch(state.clone())))
     }
 
-    /// Registers a function that sets up the `World`.
-    ///
-    /// This is an alias to `.with_fn(F)`.
+    /// Registers a function to run on the `World`.
     ///
     /// # Parameters
     ///
-    /// * `setup_fn`: Function to execute.
-    pub fn with_setup<F>(self, setup_fn: F) -> Self
+    /// * `func`: Function to execute against the world.
+    pub fn do_fn<F, T>(mut self, mut func: F) -> Self
     where
-        F: Fn(&mut World) + Send + Sync + 'static,
+        F: 'static + FnMut(&mut World) -> T + Send + Sync,
+        T: 'static,
+        Step<S>: From<T>,
     {
-        self.with_fn(setup_fn)
+        self.functions.push_back(Box::new(move |world| Step::from(func(world))));
+        self
     }
 
-    /// Registers a function that executes a desired effect.
-    ///
-    /// This is an alias to `.with_fn(F)`.
-    ///
-    /// # Parameters
-    ///
-    /// * `effect_fn`: Function that executes an effect.
-    pub fn with_effect<F>(self, effect_fn: F) -> Self
-    where
-        F: Fn(&mut World) + Send + Sync + 'static,
-    {
-        self.with_fn(effect_fn)
-    }
+    /// Wait for the given number of updates before progressing.
+    pub fn do_wait(self, count: usize) -> Self {
+        if count == 0 {
+            return self;
+        }
 
-    /// Registers a function to assert an expected outcome.
-    ///
-    /// This is an alias to `.with_fn(F)`.
-    ///
-    /// # Parameters
-    ///
-    /// * `assertion_fn`: Function that asserts the expected state.
-    pub fn with_assertion<F>(self, assertion_fn: F) -> Self
-    where
-        F: Fn(&mut World) + Send + Sync + 'static,
-    {
-        self.with_fn(assertion_fn)
+        let mut waiter = Waiter(count);
+        return self.do_fn(move |_| waiter.next());
+
+        struct Waiter(usize);
+
+        impl Waiter {
+            fn next<S>(&mut self) -> Step<S> {
+                let c = self.0.saturating_sub(1);
+
+                if c == 0 {
+                    return Step::Next;
+                }
+
+                self.0 = c;
+                Step::None
+            }
+        }
     }
 
     /// Marks that this application uses the `RenderBundle`.
@@ -704,8 +679,6 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::marker::PhantomData;
-
     use amethyst::{
         self,
         assets::{self, Asset, AssetStorage, Handle, Loader, ProcessingState, Processor},
@@ -726,7 +699,7 @@ mod test {
     #[test]
     fn bundle_build_is_ok() {
         assert!(
-            AmethystApplication::blank()
+            AmethystApplication::<(), _, _>::blank()
                 .with_bundle(BundleZero)
                 .run()
                 .is_ok()
@@ -736,7 +709,7 @@ mod test {
     #[test]
     fn load_multiple_bundles() {
         assert!(
-            AmethystApplication::blank()
+            AmethystApplication::<(), _, _>::blank()
                 .with_bundle(BundleZero)
                 .with_bundle(BundleOne)
                 .run()
@@ -752,10 +725,10 @@ mod test {
         };
 
         assert!(
-            AmethystApplication::blank()
+            AmethystApplication::<(), _, _>::blank()
                 .with_bundle(BundleZero)
                 .with_bundle(BundleOne)
-                .with_assertion(assertion_fn)
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -770,9 +743,9 @@ mod test {
         };
 
         assert!(
-            AmethystApplication::blank()
+            AmethystApplication::<(), _, _>::blank()
                 // without BundleOne
-                .with_assertion(assertion_fn)
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -780,19 +753,12 @@ mod test {
 
     #[test]
     fn assertion_switch_with_loading_state_with_add_resource_succeeds() {
-        let state_fns = || {
-            let assertion_fn = |world: &mut World| {
-                world.read_resource::<LoadResource>();
-            };
-
-            // Necessary if the State being tested is a loading state that returns `Trans::Switch`
-            let assertion_state = FunctionState::new(assertion_fn);
-            LoadingState::new(assertion_state)
-        };
-
         assert!(
             AmethystApplication::blank()
-                .with_state((), state_fns)
+                .with_state("loading", LoadingState::new("assertion"))
+                .with_state("assertion", FunctionState::new(|world: &mut World| {
+                    world.read_resource::<LoadResource>();
+                }))
                 .run()
                 .is_ok()
         );
@@ -802,15 +768,17 @@ mod test {
     fn assertion_push_with_loading_state_with_add_resource_succeeds() {
         // Alternative to embedding the `FunctionState` is to switch to a `ReturnState` but still
         // provide the assertion function
-        let state_fns = || LoadingState::new(ReturnState(Trans::Pop));
         let assertion_fn = |world: &mut World| {
             world.read_resource::<LoadResource>();
         };
 
         assert!(
             AmethystApplication::blank()
-                .with_state(state_fns)
-                .with_assertion(assertion_fn)
+                .with_state("loading", LoadingState::new("return"))
+                .with_state("return", ReturnState(Trans::Pop))
+                .do_wait(1)
+                // then assert
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -819,17 +787,16 @@ mod test {
     #[test]
     #[should_panic(expected = "Failed to run Amethyst application")]
     fn assertion_switch_with_loading_state_without_add_resource_should_panic() {
-        let state_fns = || {
-            let assertion_fn = |world: &mut World| {
-                world.read_resource::<LoadResource>();
-            };
+        let switch_state = SwitchState::new("assertion");
 
-            SwitchState::new(FunctionState::new(assertion_fn))
-        };
+        let assertion = FunctionState::new(|world: &mut World| {
+            world.read_resource::<LoadResource>();
+        });
 
         assert!(
             AmethystApplication::blank()
-                .with_state(state_fns)
+                .with_state("state", switch_state)
+                .with_state("assertion", assertion)
                 .run()
                 .is_ok()
         );
@@ -846,8 +813,8 @@ mod test {
 
         assert!(
             AmethystApplication::blank()
-                .with_state(1, SwitchState::new(PopState))
-                .with_assertion(assertion_fn)
+                .with_state((), ReturnState(Trans::Pop))
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -872,10 +839,10 @@ mod test {
         };
 
         assert!(
-            AmethystApplication::blank()
+            AmethystApplication::<(), _, _>::blank()
                 .with_bundle(BundleAsset)
-                .with_effect(effect_fn)
-                .with_assertion(assertion_fn)
+                .do_fn(effect_fn)
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -885,12 +852,13 @@ mod test {
     fn execution_order_is_setup_state_effect_assertion() {
         struct Setup;
         let setup_fns = |world: &mut World| world.add_resource(Setup);
-        let state_fns = || {
-            LoadingState::new(FunctionState::new(|world: &mut World| {
-                // Panics if setup is not run before this.
-                world.read_resource::<Setup>();
-            }))
-        };
+
+        let inner = FunctionState::new(|world: &mut World| {
+            // Panics if setup is not run before this.
+            world.read_resource::<Setup>();
+        });
+        let loading = LoadingState::new("inner");
+
         let effect_fn = |world: &mut World| {
             // If `LoadingState` is not run before this, this will panic
             world.read_resource::<LoadResource>();
@@ -908,10 +876,11 @@ mod test {
         assert!(
             AmethystApplication::blank()
                 .with_bundle(BundleAsset)
-                .with_setup(setup_fns)
-                .with_state(state_fns)
-                .with_effect(effect_fn)
-                .with_assertion(assertion_fn)
+                .with_state("loading", loading)
+                .with_state("inner", inner)
+                .do_fn(setup_fns)
+                .do_fn(effect_fn)
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -928,8 +897,8 @@ mod test {
         };
 
         assert!(
-            AmethystApplication::ui_base::<String, String>()
-                .with_assertion(assertion_fn)
+            AmethystApplication::<(), _, _>::ui_base::<String, String>()
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -942,8 +911,9 @@ mod test {
             AmethystApplication::render_base(
                 "render_base_application_can_load_material_animations",
                 false
-            ).with_effect(MaterialAnimationFixture::effect)
-            .with_assertion(MaterialAnimationFixture::assertion)
+            )
+            .do_fn(MaterialAnimationFixture::effect)
+            .do_fn(MaterialAnimationFixture::assertion)
             .run()
             .is_ok()
         );
@@ -956,8 +926,9 @@ mod test {
             AmethystApplication::render_base(
                 "render_base_application_can_load_sprite_render_animations",
                 false
-            ).with_effect(SpriteRenderAnimationFixture::effect)
-            .with_assertion(SpriteRenderAnimationFixture::assertion)
+            )
+            .do_fn(SpriteRenderAnimationFixture::effect)
+            .do_fn(SpriteRenderAnimationFixture::assertion)
             .run()
             .is_ok()
         );
@@ -983,11 +954,11 @@ mod test {
         };
 
         assert!(
-            AmethystApplication::blank()
+            AmethystApplication::<(), _, _>::blank()
                 .with_system(SystemEffect, "system_effect", &[])
-                .with_effect(effect_fn)
-                .with_assertion(|world| assert_eq!(1, get_component_zero_value(world)))
-                .with_assertion(|world| assert_eq!(2, get_component_zero_value(world)))
+                .do_fn(effect_fn)
+                .do_fn(|world| assert_eq!(1, get_component_zero_value(world)))
+                .do_fn(|world| assert_eq!(2, get_component_zero_value(world)))
                 .run()
                 .is_ok()
         );
@@ -995,7 +966,7 @@ mod test {
 
     #[test]
     fn with_system_invoked_twice_should_not_panic() {
-        AmethystApplication::blank()
+        AmethystApplication::<(), _, _>::blank()
             .with_system(SystemZero, "zero", &[])
             .with_system(SystemOne, "one", &["zero"]);
     }
@@ -1012,18 +983,21 @@ mod test {
 
             // If the system ran, the value in the `ComponentZero` should be 1.
             assert_eq!(1, component_zero.0);
+            Trans::None
         };
 
         assert!(
-            AmethystApplication::blank()
-                .with_setup(|world| {
+            AmethystApplication::<&str, _, _>::blank()
+                .with_state_system("effect", SystemEffect, "system_effect", &[])
+                .do_fn(|world| {
                     world.register::<ComponentZero>();
 
                     let entity = world.create_entity().with(ComponentZero(0)).build();
                     world.add_resource(EffectReturn(entity));
-                }).with_system_single(SystemEffect, "system_effect", &[])
-                .with_assertion(assertion_fn)
-                .with_assertion(assertion_fn)
+                    Trans::None
+                })
+                .do_fn(assertion_fn)
+                .do_fn(assertion_fn)
                 .run()
                 .is_ok()
         );
@@ -1035,10 +1009,10 @@ mod test {
     #[test]
     fn with_setup_invoked_twice_should_run_in_specified_order() {
         assert!(
-            AmethystApplication::blank()
-                .with_setup(|world| {
+            AmethystApplication::<(), _, _>::blank()
+                .do_fn(|world| {
                     world.add_resource(ApplicationResource);
-                }).with_setup(|world| {
+                }).do_fn(|world| {
                     world.read_resource::<ApplicationResource>();
                 }).run()
                 .is_ok()
@@ -1048,12 +1022,14 @@ mod test {
     #[test]
     fn with_effect_invoked_twice_should_run_in_the_specified_order() {
         assert!(
-            AmethystApplication::blank()
-                .with_effect(|world| {
+            AmethystApplication::<(), _, _>::blank()
+                .do_fn(|world| {
                     world.add_resource(ApplicationResource);
-                }).with_effect(|world| {
+                })
+                .do_fn(|world| {
                     world.read_resource::<ApplicationResource>();
-                }).run()
+                })
+                .run()
                 .is_ok()
         );
     }
@@ -1061,12 +1037,14 @@ mod test {
     #[test]
     fn with_assertion_invoked_twice_should_run_in_the_specified_order() {
         assert!(
-            AmethystApplication::blank()
-                .with_assertion(|world| {
+            AmethystApplication::<(), _, _>::blank()
+                .do_fn(|world| {
                     world.add_resource(ApplicationResource);
-                }).with_assertion(|world| {
+                })
+                .do_fn(|world| {
                     world.read_resource::<ApplicationResource>();
-                }).run()
+                })
+                .run()
                 .is_ok()
         );
     }
@@ -1075,11 +1053,16 @@ mod test {
     fn with_state_invoked_twice_should_run_in_the_specified_order() {
         assert!(
             AmethystApplication::blank()
-                .with_state(|| FunctionState::new(|world| {
+                .with_state("first", FunctionState::new(|world| {
                     world.add_resource(ApplicationResource);
-                })).with_state(|| FunctionState::new(|world| {
+                }))
+                .with_state("second", FunctionState::new(|world| {
                     world.read_resource::<ApplicationResource>();
-                })).run()
+                }))
+                .do_state("first")
+                .do_state("second")
+                .do_wait(1)
+                .run()
                 .is_ok()
         );
     }
@@ -1088,11 +1071,14 @@ mod test {
     fn setup_can_be_invoked_after_with_state() {
         assert!(
             AmethystApplication::blank()
-                .with_state(|| FunctionState::new(|world| {
+                .with_state("first", FunctionState::new(|world| {
                     world.add_resource(ApplicationResource);
-                })).with_setup(|world| {
+                }))
+                .do_wait(1)
+                .do_fn(|world| {
                     world.read_resource::<ApplicationResource>();
-                }).run()
+                })
+                .run()
                 .is_ok()
         );
     }
@@ -1102,9 +1088,10 @@ mod test {
         assert!(
             AmethystApplication::blank()
                 .with_resource(ApplicationResource)
-                .with_state(|| FunctionState::new(|world| {
+                .with_state("first", FunctionState::new(|world| {
                     world.read_resource::<ApplicationResource>();
-                })).run()
+                }))
+                .run()
                 .is_ok()
         );
     }
@@ -1118,65 +1105,40 @@ mod test {
     struct LoadResource;
 
     // === States === //
-    struct LoadingState<'a, 'b, S, E>
-    where
-        S: State<GameData<'a, 'b>, E> + 'static,
-        E: Send + Sync + 'static,
-    {
+    struct LoadingState<S> {
         next_state: Option<S>,
-        state_data: PhantomData<State<GameData<'a, 'b>, E>>,
     }
-    impl<'a, 'b, S, E> LoadingState<'a, 'b, S, E>
-    where
-        S: State<GameData<'a, 'b>, E> + 'static,
-        E: Send + Sync + 'static,
-    {
+    impl<S> LoadingState<S> {
         fn new(next_state: S) -> Self {
             LoadingState {
                 next_state: Some(next_state),
-                state_data: PhantomData,
             }
         }
     }
-    impl<'a, 'b, S, E> State<GameData<'a, 'b>, E> for LoadingState<'a, 'b, S, E>
-    where
-        S: State<GameData<'a, 'b>, E> + 'static,
-        E: Send + Sync + 'static,
-    {
-        fn update(&mut self, data: StateData<GameData>) -> Trans<GameData<'a, 'b>, E> {
-            data.data.update(&data.world);
-            data.world.add_resource(LoadResource);
-            Trans::Switch(Box::new(self.next_state.take().unwrap()))
+    impl<S, E> StateCallback<S, E> for LoadingState<S> {
+        fn update(&mut self, world: &mut World) -> Trans<S> {
+            if let Some(next) = self.next_state.take() {
+                world.add_resource(LoadResource);
+                return Trans::Switch(next);
+            }
+
+            Trans::None
         }
     }
 
-    struct SwitchState<S, T, E>
-    where
-        S: State<T, E>,
-        E: Send + Sync + 'static,
-    {
+    struct SwitchState<S> {
         next_state: Option<S>,
-        state_data: PhantomData<(T, E)>,
     }
-    impl<S, T, E> SwitchState<S, T, E>
-    where
-        S: State<T, E>,
-        E: Send + Sync + 'static,
-    {
+    impl<S> SwitchState<S> {
         fn new(next_state: S) -> Self {
             SwitchState {
                 next_state: Some(next_state),
-                state_data: PhantomData,
             }
         }
     }
-    impl<S, T, E> State<T, E> for SwitchState<S, T, E>
-    where
-        S: State<T, E> + 'static,
-        E: Send + Sync + 'static,
-    {
-        fn update(&mut self, _data: StateData<T>) -> Trans<T, E> {
-            Trans::Switch(Box::new(self.next_state.take().unwrap()))
+    impl<S, E> StateCallback<S, E> for SwitchState<S> {
+        fn update(&mut self, _: &mut World) -> Trans<S> {
+            Trans::Switch(self.next_state.take().unwrap())
         }
     }
 

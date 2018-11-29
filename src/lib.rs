@@ -87,6 +87,7 @@ extern crate rayon;
 extern crate rustc_version_runtime;
 #[macro_use]
 extern crate serde_derive;
+extern crate hashbrown;
 extern crate smallvec;
 
 pub use crate::core::{shred, shrev, specs as ecs};

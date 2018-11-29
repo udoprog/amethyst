@@ -2,7 +2,7 @@
 
 /// Types of state transitions.
 /// `S` is the state this state machine deals with.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Trans<S> {
     /// Continue as normal.
     None,

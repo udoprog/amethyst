@@ -119,7 +119,7 @@ pub type ApplicationBuilder<S> = CoreApplicationBuilder<S, StateEvent, StateEven
 /// - `R`: `EventReader` implementation for the given event type `E`
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct CoreApplication<'res, 'threadlocal, S, E = StateEvent, R = StateEventReader>
+pub struct CoreApplication<'res, 'threadlocal, S, E, R>
 where
     S: 'static + State<E>,
     E: 'static,
@@ -140,10 +140,12 @@ where
     game_data: GameData<'res, 'threadlocal>,
 }
 
-impl<'res, 'threadlocal, S> CoreApplication<'res, 'threadlocal, S, StateEvent, StateEventReader>
+impl<'res, 'threadlocal, S, E, R> CoreApplication<'res, 'threadlocal, S, E, R>
 where
-    S: State<StateEvent>,
-    S: 'static + Clone + Send + Sync,
+    S: 'static + Clone + Send + Sync + State<E>,
+    E: 'static + Clone + Send + Sync,
+    R: Default,
+    for<'event> R: EventReader<'event, Event = E>,
 {
     /// Creates a new Application with the given initial game state.
     /// This will create and allocate all the needed resources for
@@ -179,32 +181,25 @@ where
         path: P,
         initial_state: S,
         init: I,
-    ) -> Result<Application<'res, 'threadlocal, S>>
+    ) -> Result<CoreApplication<'res, 'threadlocal, S, E, R>>
     where
         P: AsRef<Path>,
         I: DataInit<GameData<'res, 'threadlocal>>,
     {
-        Self::build(path, initial_state)?.build(init)
+        CoreApplicationBuilder::new(path, initial_state)?.build(init)
     }
 
     /// Creates a new ApplicationBuilder with the given initial game state.
     ///
     /// This is identical in function to
     /// [ApplicationBuilder::new](struct.ApplicationBuilder.html#method.new).
-    pub fn build<P>(path: P, initial_state: S) -> Result<ApplicationBuilder<S>>
+    pub fn build<P>(path: P, initial_state: S) -> Result<CoreApplicationBuilder<S, E, R>>
     where
         P: AsRef<Path>,
     {
         CoreApplicationBuilder::new(path, initial_state)
     }
-}
 
-impl<'res, 'threadlocal, S, E, R> CoreApplication<'res, 'threadlocal, S, E, R>
-where
-    S: State<E>,
-    S: 'static + Clone + Send + Sync,
-    E: 'static + Clone + Send + Sync,
-{
     /// Run the gameloop until the game state indicates that the game is no
     /// longer running. This is done via the `State` returning `Trans::Quit` or
     /// `Trans::Pop` on the last state in from the stack. See full
@@ -389,7 +384,7 @@ impl<S, E, R> Drop for CoreApplication<'_, '_, S, E, R> {
 /// `CoreApplicationBuilder` is an interface that allows for creation of an
 /// [`Application`](struct.Application.html) using a custom set of configuration.
 /// This is the typical way an [`Application`](struct.Application.html) object is created.
-pub struct CoreApplicationBuilder<S, E = StateEvent, R = StateEventReader>
+pub struct CoreApplicationBuilder<S, E, R>
 where
     S: State<E>,
 {
@@ -407,7 +402,7 @@ where
     /// Register default event handlers.
     pub fn with_defaults(mut self) -> Self {
         // Handle close request on initial state.
-        self.states.register_global_callback(DefaultCallback);
+        self.states.register_global(DefaultCallback);
 
         return self;
 
@@ -434,6 +429,9 @@ where
 impl<S, E, R> CoreApplicationBuilder<S, E, R>
 where
     S: 'static + Clone + Send + Sync + State<E>,
+    E: Clone + Send + Sync + 'static,
+    R: Default,
+    for<'event> R: EventReader<'event, Event = E>,
 {
     /// Creates a new [ApplicationBuilder](struct.ApplicationBuilder.html) instance
     /// that wraps the initial_state. This is the more verbose way of initializing
@@ -568,7 +566,13 @@ where
     where
         C: GlobalCallback<S, E>,
     {
-        self.states.register_global_callback(callback);
+        self.states.register_global(callback);
+        self
+    }
+
+    /// Register a boxed global callback that will be run for all states.
+    pub fn with_boxed_global(mut self, callback: Box<dyn GlobalCallback<S, E>>) -> Self {
+        self.states.register_boxed_global(callback);
         self
     }
 
@@ -837,9 +841,6 @@ where
         init: I,
     ) -> Result<CoreApplication<'res, 'threadlocal, S, E, R>>
     where
-        E: Clone + Send + Sync + 'static,
-        R: Default,
-        for<'event> R: EventReader<'event, Event = E>,
         I: DataInit<GameData<'res, 'threadlocal>>,
     {
         trace!("Entering `ApplicationBuilder::build`");
@@ -865,7 +866,7 @@ where
 
         let game_data = init.build(&mut world);
 
-        states.register_global_callback(UpdateState);
+        states.register_global(UpdateState);
 
         return Ok(CoreApplication {
             world,

@@ -277,7 +277,7 @@ where
     /// let mut world = World::new();
     ///
     /// // Set up the global event handler with our capture.
-    /// states.register_global_callback(Global {
+    /// states.register_global(Global {
     ///     capture: Rc::clone(&capture),
     /// });
     ///
@@ -307,11 +307,16 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub fn register_global_callback<C: 'static>(&mut self, callback: C)
+    pub fn register_global<C: 'static>(&mut self, callback: C)
     where
         C: GlobalCallback<S, E>,
     {
-        self.global_callbacks.push(Box::new(callback));
+        self.register_boxed_global(Box::new(callback));
+    }
+
+    /// Register a boxed global callback that is called on any state.
+    pub fn register_boxed_global(&mut self, callback: Box<dyn GlobalCallback<S, E>>) {
+        self.global_callbacks.push(callback);
     }
 
     /// Checks whether the state machine is running.

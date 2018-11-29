@@ -6,8 +6,8 @@ pub use crate::{
     core::{SystemExt, WithNamed},
     dynamic,
     ecs::prelude::{Builder, World},
-    state_event::StateEvent,
     game_data::{DataInit, GameData, GameDataBuilder},
+    state_event::StateEvent,
 };
 
 #[cfg(not(feature = "dynamic_app"))]

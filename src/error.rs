@@ -7,7 +7,7 @@ use std::{
     result::Result as StdResult,
 };
 
-use crate::{config::ConfigError, core, renderer, state::StateError};
+use crate::{config::ConfigError, core, dynamic, renderer, state::StateError};
 
 /// Engine result type.
 pub type Result<T> = StdResult<T, Error>;
@@ -19,6 +19,8 @@ pub enum Error {
     Application,
     /// StateMachine error
     StateMachine(StateError),
+    /// Dynamic StateMachine error
+    DynamicStateMachine(dynamic::StateError),
     /// Asset management error.
     // Asset(AssetError),
     /// Configuration error.
@@ -34,6 +36,7 @@ impl StdError for Error {
             Error::Config(_) => "Configuration error!",
             Error::Core(_) => "Core error!",
             Error::StateMachine(_) => "StateMachine error!",
+            Error::DynamicStateMachine(_) => "StateMachine error!",
         }
     }
 
@@ -52,6 +55,7 @@ impl Display for Error {
             Error::Config(ref e) => write!(fmt, "Configuration loading failed: {}", e),
             Error::Core(ref e) => write!(fmt, "System creation failed: {}", e),
             Error::StateMachine(ref e) => write!(fmt, "Error in state machine: {}", e),
+            Error::DynamicStateMachine(ref e) => write!(fmt, "Error in state machine: {}", e),
         }
     }
 }

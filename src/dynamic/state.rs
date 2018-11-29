@@ -1,8 +1,32 @@
 //! Dynamic utilities for game state management.
 
-use crate::{dynamic::trans::Trans, ecs::prelude::World, error::Error, state::StateError};
+use crate::{dynamic::trans::Trans, ecs::prelude::World, error::Error};
 
 use smallvec::SmallVec;
+use std::fmt;
+
+/// Error type for errors occurring in StateMachine
+#[derive(Debug)]
+pub enum StateError {
+    /// Error raised when no states are present.
+    NoStatesPresent,
+    /// Conflicting handler for state.
+    CallbackConflict,
+}
+
+impl fmt::Display for StateError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            StateError::NoStatesPresent => write!(
+                fmt,
+                "Tried to start state machine without any states present"
+            ),
+            StateError::CallbackConflict => {
+                write!(fmt, "Tried to register conflicting callback for state.")
+            }
+        }
+    }
+}
 
 /// The trait associated with a stage.
 pub trait State<E>
@@ -183,7 +207,7 @@ where
         let s = self.callbacks.get_mut(&state);
 
         if s.is_some() {
-            return Err(Error::StateMachine(StateError::CallbackConflict));
+            return Err(Error::DynamicStateMachine(StateError::CallbackConflict));
         }
 
         *s = Some(Box::new(callback));
@@ -345,7 +369,7 @@ where
         let state = self
             .stack
             .last()
-            .ok_or_else(|| Error::StateMachine(StateError::NoStatesPresent))?;
+            .ok_or_else(|| Error::DynamicStateMachine(StateError::NoStatesPresent))?;
 
         if let Some(c) = self.callbacks.get_mut(state).as_mut() {
             c.on_start(world);

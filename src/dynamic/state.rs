@@ -2,8 +2,11 @@
 
 use crate::{dynamic::trans::Trans, ecs::prelude::World, error::Error};
 
+use hashbrown;
 use smallvec::SmallVec;
 use std::fmt;
+use std::hash;
+use std::mem;
 
 /// Error type for errors occurring in StateMachine
 #[derive(Debug)]
@@ -42,43 +45,20 @@ pub trait StateStorage<S, E>
 where
     Self: Sized,
 {
+    /// Insert the given callback, returning an existing callback if it is already present.
+    fn insert(
+        &mut self,
+        state: S,
+        callback: Box<dyn StateCallback<S, E>>,
+    ) -> Option<Box<dyn StateCallback<S, E>>>;
+
     /// Get mutable storage for the given state.
-    fn get_mut(&mut self, value: &S) -> &mut Option<Box<dyn StateCallback<S, E>>>;
+    fn get_mut(&mut self, value: &S) -> Option<&mut Box<dyn StateCallback<S, E>>>;
 
     /// Apply the specified function to all values.
     fn do_values<F>(&mut self, apply: F)
     where
         F: FnMut(&mut Box<dyn StateCallback<S, E>>);
-}
-
-/// Storage implementation for types which only have one value.
-pub struct SingletonStateStorage<S, E> {
-    callback: Option<Box<dyn StateCallback<S, E>>>,
-}
-
-impl<S, E> Default for SingletonStateStorage<S, E> {
-    fn default() -> Self {
-        SingletonStateStorage { callback: None }
-    }
-}
-
-impl<S, E> StateStorage<S, E> for SingletonStateStorage<S, E> {
-    fn get_mut(&mut self, _: &S) -> &mut Option<Box<dyn StateCallback<S, E>>> {
-        &mut self.callback
-    }
-
-    fn do_values<F>(&mut self, mut apply: F)
-    where
-        F: FnMut(&mut Box<dyn StateCallback<S, E>>),
-    {
-        if let Some(c) = self.callback.as_mut() {
-            apply(c);
-        }
-    }
-}
-
-impl<E> State<E> for () {
-    type Storage = SingletonStateStorage<Self, E>;
 }
 
 /// A callback that is registered for all events.
@@ -204,13 +184,19 @@ where
     where
         C: StateCallback<S, E>,
     {
-        let s = self.callbacks.get_mut(&state);
+        self.register_boxed_callback(state, Box::new(callback))
+    }
 
-        if s.is_some() {
+    /// Register a callback associated with a specific state.
+    pub fn register_boxed_callback(
+        &mut self,
+        state: S,
+        callback: Box<dyn StateCallback<S, E>>,
+    ) -> Result<(), Error> {
+        if self.callbacks.insert(state, callback).is_some() {
             return Err(Error::DynamicStateMachine(StateError::CallbackConflict));
         }
 
-        *s = Some(Box::new(callback));
         Ok(())
     }
 
@@ -371,7 +357,7 @@ where
             .last()
             .ok_or_else(|| Error::DynamicStateMachine(StateError::NoStatesPresent))?;
 
-        if let Some(c) = self.callbacks.get_mut(state).as_mut() {
+        if let Some(c) = self.callbacks.get_mut(state) {
             c.on_start(world);
         }
 
@@ -454,7 +440,7 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s).as_mut()) {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
                 trans.update(c.handle_event(world, &event));
             }
 
@@ -483,7 +469,7 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s).as_mut()) {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
                 trans.update(c.fixed_update(world));
             }
 
@@ -517,7 +503,7 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s).as_mut()) {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
                 trans.update(c.update(world));
             }
 
@@ -556,15 +542,11 @@ where
             return;
         }
 
-        if let Some(c) = self
-            .stack
-            .pop()
-            .and_then(|s| self.callbacks.get_mut(&s).as_mut())
-        {
+        if let Some(c) = self.stack.pop().and_then(|s| self.callbacks.get_mut(&s)) {
             c.on_stop(world);
         }
 
-        if let Some(c) = self.callbacks.get_mut(&state).as_mut() {
+        if let Some(c) = self.callbacks.get_mut(&state) {
             c.on_start(world);
         }
 
@@ -587,11 +569,11 @@ where
             ..
         } = *self;
 
-        if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s).as_mut()) {
+        if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
             c.on_pause(world);
         }
 
-        if let Some(c) = callbacks.get_mut(&state).as_mut() {
+        if let Some(c) = callbacks.get_mut(&state) {
             c.on_start(world);
         }
 
@@ -614,13 +596,13 @@ where
             None => return,
         };
 
-        if let Some(c) = self.callbacks.get_mut(&head).as_mut() {
+        if let Some(c) = self.callbacks.get_mut(&head) {
             c.on_stop(world);
         }
 
         match self.stack.last() {
             Some(current) => {
-                if let Some(c) = self.callbacks.get_mut(current).as_mut() {
+                if let Some(c) = self.callbacks.get_mut(current) {
                     c.on_resume(world);
                 }
 
@@ -644,11 +626,7 @@ where
             return;
         }
 
-        while let Some(c) = self
-            .stack
-            .pop()
-            .and_then(|s| self.callbacks.get_mut(&s).as_mut())
-        {
+        while let Some(c) = self.stack.pop().and_then(|s| self.callbacks.get_mut(&s)) {
             c.on_stop(world);
         }
 
@@ -659,3 +637,110 @@ where
         self.running = false;
     }
 }
+
+/// Storage implementation for types which only have one value.
+pub struct SingletonStateStorage<S, E> {
+    callback: Option<Box<dyn StateCallback<S, E>>>,
+}
+
+impl<S, E> Default for SingletonStateStorage<S, E> {
+    fn default() -> Self {
+        SingletonStateStorage { callback: None }
+    }
+}
+
+impl<S, E> StateStorage<S, E> for SingletonStateStorage<S, E> {
+    fn insert(
+        &mut self,
+        _: S,
+        callback: Box<dyn StateCallback<S, E>>,
+    ) -> Option<Box<dyn StateCallback<S, E>>> {
+        mem::replace(&mut self.callback, Some(callback))
+    }
+
+    fn get_mut(&mut self, _: &S) -> Option<&mut Box<dyn StateCallback<S, E>>> {
+        self.callback.as_mut()
+    }
+
+    fn do_values<F>(&mut self, mut apply: F)
+    where
+        F: FnMut(&mut Box<dyn StateCallback<S, E>>),
+    {
+        if let Some(c) = self.callback.as_mut() {
+            apply(c);
+        }
+    }
+}
+
+/// Storage implementation for types which can be hashed.
+pub struct MapStateStorage<S, E>
+where
+    S: hash::Hash + PartialEq + Eq,
+{
+    callbacks: hashbrown::HashMap<S, Box<dyn StateCallback<S, E>>>,
+}
+
+impl<S, E> StateStorage<S, E> for MapStateStorage<S, E>
+where
+    S: hash::Hash + PartialEq + Eq,
+{
+    fn insert(
+        &mut self,
+        state: S,
+        callback: Box<dyn StateCallback<S, E>>,
+    ) -> Option<Box<dyn StateCallback<S, E>>> {
+        self.callbacks.insert(state, callback)
+    }
+
+    fn get_mut(&mut self, state: &S) -> Option<&mut Box<dyn StateCallback<S, E>>> {
+        self.callbacks.get_mut(state)
+    }
+
+    fn do_values<F>(&mut self, mut apply: F)
+    where
+        F: FnMut(&mut Box<dyn StateCallback<S, E>>),
+    {
+        for c in self.callbacks.values_mut() {
+            apply(c);
+        }
+    }
+}
+
+impl<S, E> Default for MapStateStorage<S, E>
+where
+    S: hash::Hash + PartialEq + Eq,
+{
+    fn default() -> Self {
+        MapStateStorage {
+            callbacks: hashbrown::HashMap::new(),
+        }
+    }
+}
+
+impl<E> State<E> for () {
+    type Storage = SingletonStateStorage<Self, E>;
+}
+
+/// Helper macro to implement storage for certain types.
+macro_rules! impl_map_storage {
+    ($lt:lifetime, $ty:ty) => {
+        impl<$lt, E> State<E> for &$lt $ty {
+            type Storage = MapStateStorage<Self, E>;
+        }
+    };
+
+    ($ty:ty) => {
+        impl<E> State<E> for $ty {
+            type Storage = MapStateStorage<Self, E>;
+        }
+    };
+}
+
+/// Types that can be used as states through `MapStateStorage`.
+impl_map_storage!('a, str);
+impl_map_storage!(u8);
+impl_map_storage!(u32);
+impl_map_storage!(u64);
+impl_map_storage!(i8);
+impl_map_storage!(i32);
+impl_map_storage!(i64);

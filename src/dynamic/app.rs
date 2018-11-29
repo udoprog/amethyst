@@ -3,10 +3,8 @@
 use std::{error::Error as StdError, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 
 use crate::{
-    core::SystemBundle,
     game_data::{DataInit, GameData},
-    renderer::pipe::pass::Pass,
-    shred::{Resource, System},
+    shred::Resource,
 };
 use log::Level;
 use rayon::ThreadPoolBuilder;
@@ -55,7 +53,7 @@ use crate::{
 /// #[macro_use]
 /// extern crate log;
 ///
-/// use amethyst::prelude::dynamic::Application;
+/// use amethyst::prelude::{dynamic::Application, GameDataBuilder};
 /// use amethyst::core::transform::{Parent, Transform};
 /// use amethyst::ecs::prelude::System;
 ///
@@ -64,7 +62,7 @@ use crate::{
 ///
 ///     // Build the application instance to initialize the default logger.
 ///     let mut game = Application::build("assets/", ())?
-///         .build()?;
+///         .build(GameDataBuilder::default())?;
 ///
 ///     // Now logging can be performed as normal.
 ///     info!("Using the default logger provided by amethyst");
@@ -83,7 +81,7 @@ use crate::{
 /// extern crate log;
 /// extern crate env_logger;
 ///
-/// use amethyst::prelude::dynamic::Application;
+/// use amethyst::prelude::{dynamic::Application, GameDataBuilder};
 /// use amethyst::core::transform::{Parent, Transform};
 /// use amethyst::ecs::prelude::System;
 ///
@@ -95,7 +93,7 @@ use crate::{
 ///     // The default logger will be automatically disabled and any logging amethyst does
 ///     // will go through your custom logger.
 ///     let mut game = Application::build("assets/", ())?
-///         .build()?;
+///         .build(GameDataBuilder::default())?;
 ///
 ///     Ok(())
 /// }
@@ -463,7 +461,7 @@ where
     /// # Examples
     ///
     /// ```no_run
-    /// use amethyst::prelude::dynamic::Application;
+    /// use amethyst::prelude::{dynamic::Application, GameDataBuilder};
     /// use amethyst::core::transform::{Parent, Transform};
     /// use amethyst::ecs::prelude::System;
     ///
@@ -480,7 +478,7 @@ where
     ///
     /// // lastly we can build the Application object
     /// // the `build` function takes the user defined game data initializer as input
-    ///     .build()?;
+    ///     .build(GameDataBuilder::default())?;
     ///
     /// // the game instance can now be run, this exits only when the game is done
     /// game.run();
@@ -553,6 +551,25 @@ where
     {
         self.states.register_callback(state, callback)?;
         Ok(self)
+    }
+
+    /// Register a boxed callback associated with a specific state.
+    pub fn with_boxed_state(
+        mut self,
+        state: S,
+        callback: Box<dyn StateCallback<S, E>>,
+    ) -> Result<Self> {
+        self.states.register_boxed_callback(state, callback)?;
+        Ok(self)
+    }
+
+    /// Register a global callback that will be run for all states.
+    pub fn with_global<C: 'static>(mut self, callback: C) -> Self
+    where
+        C: GlobalCallback<S, E>,
+    {
+        self.states.register_global_callback(callback);
+        self
     }
 
     /// Registers a component into the entity-component-system. This method
@@ -689,7 +706,7 @@ where
     /// ```no_run
     /// # #[macro_use] extern crate amethyst;
     ///
-    /// use amethyst::prelude::dynamic::{StateCallback, Application};
+    /// use amethyst::prelude::{dynamic::{StateCallback, Application}, GameDataBuilder};
     /// use amethyst::assets::{Directory, Loader};
     /// use amethyst::renderer::ObjFormat;
     /// use amethyst::ecs::prelude::World;
@@ -717,7 +734,7 @@ where
     ///     // Register the directory "custom_directory" under the name "resources".
     ///     .with_source("custom_store", Directory::new("custom_directory"))
     ///     .with_state(State::Loading, LoadingState)?
-    ///     .build()?;
+    ///     .build(GameDataBuilder::default())?;
     ///
     /// game.run();
     /// # Ok(())

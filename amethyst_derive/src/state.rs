@@ -14,7 +14,8 @@ pub fn impl_state(ast: &DeriveInput) -> TokenStream {
     let callback = quote!(Box<dyn amethyst::dynamic::StateCallback<#base, E>>);
 
     let mut fields = Vec::new();
-    let mut variants = Vec::new();
+    let mut get_mut_variants = Vec::new();
+    let mut insert_variants = Vec::new();
     let mut names = Vec::new();
 
     for (i, variant) in en.variants.iter().enumerate() {
@@ -26,7 +27,10 @@ pub fn impl_state(ast: &DeriveInput) -> TokenStream {
         let field = Ident::new(&format!("f{}", i), Span::call_site());
         let var = &variant.ident;
 
-        variants.push(quote!(#base::#var => return &mut self.#field));
+        get_mut_variants.push(quote!(#base::#var => return self.#field.as_mut()));
+        insert_variants.push(
+            quote!(#base::#var => return ::std::mem::replace(&mut self.#field, Some(callback))),
+        );
         fields.push(quote!(#field: Option<#callback>));
         names.push(field);
     }
@@ -46,8 +50,16 @@ pub fn impl_state(ast: &DeriveInput) -> TokenStream {
         }
 
         impl<E> amethyst::dynamic::StateStorage<#base, E> for #storage<E> {
-            fn get_mut(&mut self, value: &#base) -> &mut Option<#callback> {
-                match *value { #(#variants,)* }
+            fn insert(
+                &mut self,
+                state: #base,
+                callback: #callback,
+            ) -> Option<#callback> {
+                match state { #(#insert_variants,)* }
+            }
+
+            fn get_mut(&mut self, value: &#base) -> Option<&mut #callback> {
+                match *value { #(#get_mut_variants,)* }
             }
 
             fn do_values<F>(&mut self, mut apply: F) where F: FnMut(&mut #callback) {

@@ -81,3 +81,9 @@ impl<S> IntoIterator for Trans<S> {
 ///
 /// Transitions will be executed sequentially by Amethyst's `CoreApplication` update loop.
 pub type TransEvent<S> = Box<dyn Fn() -> Trans<S> + Send + Sync + 'static>;
+
+impl<S> From<()> for Trans<S> {
+    fn from(value: ()) -> Trans<S> {
+        Trans::None
+    }
+}

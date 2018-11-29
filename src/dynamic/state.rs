@@ -32,7 +32,7 @@ impl fmt::Display for StateError {
 }
 
 /// The trait associated with a stage.
-pub trait State<E>
+pub trait State<E>: fmt::Debug
 where
     Self: Sized,
 {
@@ -445,11 +445,11 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
+            for c in global_callbacks {
                 trans.update(c.handle_event(world, &event));
             }
 
-            for c in global_callbacks {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
                 trans.update(c.handle_event(world, &event));
             }
         }
@@ -474,7 +474,7 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
+            for c in global_callbacks {
                 trans.update(c.fixed_update(world));
             }
 
@@ -483,7 +483,7 @@ where
                 trans.update(c.shadow_fixed_update(world));
             });
 
-            for c in global_callbacks {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
                 trans.update(c.fixed_update(world));
             }
         }
@@ -508,7 +508,8 @@ where
                 ..
             } = *self;
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
+            // Regular update for global callbacks.
+            for c in global_callbacks {
                 trans.update(c.update(world));
             }
 
@@ -517,8 +518,7 @@ where
                 trans.update(c.shadow_update(world));
             });
 
-            // Regular update for global callbacks.
-            for c in global_callbacks {
+            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
                 trans.update(c.update(world));
             }
         }

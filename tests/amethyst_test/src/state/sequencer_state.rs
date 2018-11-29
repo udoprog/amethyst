@@ -7,20 +7,18 @@ use amethyst::prelude::*;
 /// "opt-out" of going through the stack.
 #[derive(Derivative, new)]
 #[derivative(Debug)]
-pub struct SequencerState<T, E>
-where
-    E: Send + Sync + 'static,
-{
+pub struct SequencerState<S> {
     /// States to switch through, in reverse order.
     #[derivative(Debug = "ignore")]
-    states: Vec<Box<State<T, E>>>,
+    states: Vec<S>,
 }
 
-impl<T, E> State<T, E> for SequencerState<T, E>
+impl<S, E> GlobalCallback<S, E> for SequencerState<S>
 where
-    E: Send + Sync + 'static,
+    S: 'static + Send + Sync + State<E>,
+    E: 'static + Send + Sync,
 {
-    fn update(&mut self, _data: StateData<T>) -> Trans<T, E> {
+    fn update(&mut self, _: &mut World) -> Trans<S> {
         if let Some(state) = self.states.pop() {
             Trans::Push(state)
         } else {

@@ -22,9 +22,7 @@ use amethyst::{
 use boxfnonce::SendBoxFnOnce;
 use hetseq::Queue;
 
-use crate::{
-    CustomDispatcherStateBuilder, FunctionState, GameUpdate, SequencerState, SystemInjectionBundle,
-};
+use crate::{CustomDispatcherStateBuilder, FunctionState, SequencerState, SystemInjectionBundle};
 
 type BundleAddFn = SendBoxFnOnce<
     'static,
@@ -44,7 +42,10 @@ type BundleAddFn = SendBoxFnOnce<
 //   in a scope greater than the `AmethystApplication`'s lifetime, which detracts from the
 //   ergonomics of this test harness.
 type FnResourceAdd = Box<FnMut(&mut World) + Send>;
-type FnState<T, E> = SendBoxFnOnce<'static, (), Box<State<T, E>>>;
+/// Constructs a registered state.
+type FnStateAdd<S, E> = SendBoxFnOnce<'static, (), Box<StateCallback<S, E>>>;
+/// Constructs a registered global.
+type FnGlobalAdd<S, E> = SendBoxFnOnce<'static, (), Box<GlobalCallback<S, E>>>;
 
 type DefaultPipeline = PipelineBuilder<
     Queue<(
@@ -78,10 +79,7 @@ lazy_static! {
 /// * `E`: Custom event type shared between states.
 #[derive(Derivative, Default)]
 #[derivative(Debug)]
-pub struct AmethystApplication<T, E, R>
-where
-    E: Send + Sync + 'static,
-{
+pub struct AmethystApplication<S, E, R> {
     /// Functions to add bundles to the game data.
     ///
     /// This is necessary because `System`s are not `Send`, and so we cannot send `GameDataBuilder`
@@ -98,21 +96,26 @@ where
     resource_add_fns: Vec<FnResourceAdd>,
     /// States to run, in user specified order.
     #[derivative(Debug = "ignore")]
-    state_fns: Vec<FnState<T, E>>,
+    states: Vec<(S, FnStateAdd<S, E>)>,
+    #[derivative(Debug = "ignore")]
+    globals: Vec<FnGlobalAdd<S, E>>,
     /// Game data and event type.
-    state_data: PhantomData<(T, E, R)>,
+    state_data: PhantomData<R>,
     /// Whether or not this application uses the `RenderBundle`.
     render: bool,
 }
 
-impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader> {
+impl<S> AmethystApplication<S, StateEvent, StateEventReader>
+where
+    S: 'static + State<StateEvent>,
+{
     /// Returns an Amethyst application without any bundles.
-    pub fn blank() -> AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader>
-    {
+    pub fn blank() -> AmethystApplication<S, StateEvent, StateEventReader> {
         AmethystApplication {
             bundle_add_fns: Vec::new(),
             resource_add_fns: Vec::new(),
-            state_fns: Vec::new(),
+            states: Vec::new(),
+            globals: Vec::new(),
             state_data: PhantomData,
             render: false,
         }
@@ -122,8 +125,7 @@ impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReade
     ///
     /// This also adds a `ScreenDimensions` resource to the `World` so that UI calculations can be
     /// done.
-    pub fn ui_base<AX, AC>(
-) -> AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader>
+    pub fn ui_base<AX, AC>() -> AmethystApplication<S, StateEvent, StateEventReader>
     where
         AX: Hash + Eq + Clone + Send + Sync + 'static,
         AC: Hash + Eq + Clone + Send + Sync + 'static,
@@ -148,7 +150,7 @@ impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReade
     pub fn render_base<'name, N>(
         test_name: N,
         visibility: bool,
-    ) -> AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReader>
+    ) -> AmethystApplication<S, StateEvent, StateEventReader>
     where
         N: Into<&'name str>,
     {
@@ -166,16 +168,19 @@ impl AmethystApplication<GameData<'static, 'static>, StateEvent, StateEventReade
                 "sprite_render_sampler_interpolation_system",
             ])).with_render_bundle(test_name, visibility)
     }
+}
 
+impl<S, E, R> AmethystApplication<S, E, R> {
     /// Returns a `String` to `<crate_dir>/assets`.
     pub fn assets_dir() -> String {
         format!("{}/assets", application_root_dir())
     }
 }
 
-impl<E, R> AmethystApplication<GameData<'static, 'static>, E, R>
+impl<S, E, R> AmethystApplication<S, E, R>
 where
-    E: Clone + Send + Sync + 'static,
+    S: 'static + State<E> + Clone + Default + Send + Sync,
+    E: 'static + Clone + Send + Sync,
     R: Default,
 {
     /// Returns the built Application.
@@ -189,12 +194,16 @@ where
     /// separate thread and waits for it to end before returning.
     ///
     /// See <https://users.rust-lang.org/t/trouble-identifying-cause-of-segfault/18096>
-    pub fn build(self) -> Result<CoreApplication<'static, GameData<'static, 'static>, E, R>>
+    pub fn build(self) -> Result<CoreApplication<'static, 'static, S, E, R>>
     where
         for<'b> R: EventReader<'b, Event = E>,
     {
-        let params = (self.bundle_add_fns, self.resource_add_fns, self.state_fns);
-        Self::build_internal(params)
+        Self::build_internal(
+            self.bundle_add_fns,
+            self.resource_add_fns,
+            self.states,
+            self.globals,
+        )
     }
 
     // Hack to get around `S` or `T` not being `Send`
@@ -204,14 +213,12 @@ where
     //
     // Need to `#[allow(type_complexity)]` because the type declaration would have unused type
     // parameters which causes a compilation failure.
-    #[allow(unknown_lints, type_complexity)]
     fn build_internal(
-        (bundle_add_fns, resource_add_fns, state_fns): (
-            Vec<BundleAddFn>,
-            Vec<FnResourceAdd>,
-            Vec<FnState<GameData<'static, 'static>, E>>,
-        ),
-    ) -> Result<CoreApplication<'static, GameData<'static, 'static>, E, R>>
+        bundle_add_fns: Vec<BundleAddFn>,
+        resource_add_fns: Vec<FnResourceAdd>,
+        states: Vec<(S, FnStateAdd<S, E>)>,
+        globals: Vec<FnGlobalAdd<S, E>>,
+    ) -> Result<CoreApplication<'static, 'static, S, E, R>>
     where
         for<'b> R: EventReader<'b, Event = E>,
     {
@@ -222,31 +229,45 @@ where
             },
         )?;
 
-        let mut states = Vec::<Box<State<GameData<'static, 'static>, E>>>::new();
-        state_fns
-            .into_iter()
-            .rev()
-            .for_each(|state_fn| states.push(state_fn.call()));
-        Self::build_application(SequencerState::new(states), game_data, resource_add_fns)
+        Self::build_application(game_data, resource_add_fns, states, globals)
     }
 
-    fn build_application<S>(
-        first_state: S,
+    fn build_application(
         game_data: GameDataBuilder<'static, 'static>,
         resource_add_fns: Vec<FnResourceAdd>,
-    ) -> Result<CoreApplication<'static, GameData<'static, 'static>, E, R>>
+        states: Vec<(S, FnStateAdd<S, E>)>,
+        globals: Vec<FnGlobalAdd<S, E>>,
+    ) -> Result<CoreApplication<'static, 'static, S, E, R>>
     where
-        S: State<GameData<'static, 'static>, E> + 'static,
         for<'b> R: EventReader<'b, Event = E>,
     {
-        let mut application_builder =
-            CoreApplication::build(AmethystApplication::assets_dir(), first_state)?;
+        let initial_state = states.first().map(|(s, _)| s.clone()).unwrap_or_default();
+
+        let mut application_builder = CoreApplication::build(Self::assets_dir(), initial_state)?;
+
+        let mut sequenced_states = Vec::new();
+
+        for (state, callback) in states {
+            let callback = callback.call();
+            sequenced_states.push(state.clone());
+            application_builder = application_builder.with_boxed_state(state, callback)?;
+        }
+
+        for callback in globals {
+            let global = callback.call();
+            application_builder = application_builder.with_boxed_global(global);
+        }
+
+        application_builder =
+            application_builder.with_global(SequencerState::new(sequenced_states));
+
         {
             let world = &mut application_builder.world;
             for mut function in resource_add_fns {
                 function(world);
             }
         }
+
         application_builder.build(game_data)
     }
 
@@ -258,9 +279,14 @@ where
     where
         for<'b> R: EventReader<'b, Event = E>,
     {
-        let params = (self.bundle_add_fns, self.resource_add_fns, self.state_fns);
-
-        let render = self.render;
+        let AmethystApplication {
+            bundle_add_fns,
+            resource_add_fns,
+            states,
+            globals,
+            render,
+            ..
+        } = self;
 
         // Run in a sub thread due to mesa's threading issues with GL software rendering
         // See: <https://users.rust-lang.org/t/trouble-identifying-cause-of-segfault/18096>
@@ -281,11 +307,11 @@ where
                 //
                 // * <https://github.com/tomaka/glutin/issues/1034> can still happen
                 // * <https://github.com/tomaka/glutin/issues/1038> may be completely removed
-                Self::build_internal(params)?.run();
+                Self::build_internal(bundle_add_fns, resource_add_fns, states, globals)?.run();
 
                 drop(guard);
             } else {
-                Self::build_internal(params)?.run();
+                Self::build_internal(bundle_add_fns, resource_add_fns, states, globals)?.run();
             }
 
             Ok(())
@@ -294,10 +320,10 @@ where
     }
 }
 
-impl<T, E, R> AmethystApplication<T, E, R>
+impl<S, E, R> AmethystApplication<S, E, R>
 where
-    T: GameUpdate,
-    E: Send + Sync + 'static,
+    S: 'static + State<E>,
+    E: 'static + Send + Sync,
 {
     /// Use the specified custom event type instead of `()`.
     ///
@@ -308,22 +334,24 @@ where
     ///
     /// * `Evt`: Type used for state events.
     /// * `Rdr`: Event reader of the state events.
-    pub fn with_custom_event_type<Evt, Rdr>(self) -> AmethystApplication<T, Evt, Rdr>
+    pub fn with_custom_event_type<Evt, Rdr>(self) -> AmethystApplication<S, Evt, Rdr>
     where
         Evt: Send + Sync + 'static,
         for<'b> Rdr: EventReader<'b, Event = Evt>,
     {
-        if !self.state_fns.is_empty() {
+        if !self.states.is_empty() {
             panic!(
                 "`{}` must be invoked **before** any other `.with_*()` \
                  functions calls.",
                 stringify!(with_custom_event_type::<E>())
             );
         }
+
         AmethystApplication {
             bundle_add_fns: self.bundle_add_fns,
             resource_add_fns: self.resource_add_fns,
-            state_fns: Vec::new(),
+            states: Vec::new(),
+            globals: Vec::new(),
             state_data: PhantomData,
             render: self.render,
         }
@@ -459,19 +487,45 @@ where
         self
     }
 
-    /// Adds a state to run in the Amethyst application.
-    ///
-    /// # Parameters
-    ///
-    /// * `state_fn`: `State` to use.
-    pub fn with_state<S, FnStateLocal>(mut self, state_fn: FnStateLocal) -> Self
+    /// Register a callback associated with a specific state.
+    pub fn with_state<C: 'static>(self, state: S, callback: C) -> Self
     where
-        S: State<T, E> + 'static,
-        FnStateLocal: FnOnce() -> S + Send + Sync + 'static,
+        C: StateCallback<S, E> + Send + Sync,
     {
-        // Box up the state
-        let closure = move || Box::new((state_fn)()) as Box<State<T, E>>;
-        self.state_fns.push(SendBoxFnOnce::from(closure));
+        self.with_state_fn(state, move || callback)
+    }
+
+    /// Register a state callback which is `!Send`.
+    pub fn with_state_fn<T: 'static, C: 'static>(mut self, state: S, callback: C) -> Self
+    where
+        C: FnOnce() -> T + Send + Sync,
+        T: StateCallback<S, E>,
+    {
+        self.states.push((
+            state,
+            SendBoxFnOnce::from(move || Box::new(callback()) as Box<StateCallback<S, E>>),
+        ));
+
+        self
+    }
+
+    /// Register a global callback associated with all states.
+    pub fn with_global<C: 'static>(self, callback: C) -> Self
+    where
+        C: GlobalCallback<S, E> + Send + Sync,
+    {
+        self.with_global_fn(move || callback)
+    }
+
+    /// Register a global callback associated with all states with a callback that is `!Send`.
+    pub fn with_global_fn<T: 'static, C: 'static>(mut self, callback: C) -> Self
+    where
+        C: FnOnce() -> T + Send + Sync,
+        T: GlobalCallback<S, E>,
+    {
+        self.globals.push(SendBoxFnOnce::from(move || {
+            Box::new(callback()) as Box<GlobalCallback<S, E>>
+        }));
         self
     }
 
@@ -511,11 +565,13 @@ where
         Sys: for<'sys_local> System<'sys_local> + Send + Sync + 'static,
     {
         let name = name.into();
+
         let deps = deps
             .iter()
             .map(|dep| dep.clone().into())
             .collect::<Vec<String>>();
-        self.with_state(move || {
+
+        self.with_global_fn(move || {
             CustomDispatcherStateBuilder::new()
                 .with(
                     system,
@@ -534,7 +590,7 @@ where
     where
         F: Fn(&mut World) + Send + Sync + 'static,
     {
-        self.with_state(move || FunctionState::new(func))
+        self.with_global_fn(move || FunctionState::new(func))
     }
 
     /// Registers a function that sets up the `World`.
@@ -661,7 +717,7 @@ mod test {
     };
 
     use super::AmethystApplication;
-    use crate::{EffectReturn, FunctionState, PopState};
+    use crate::{EffectReturn, FunctionState, ReturnState};
     #[cfg(feature = "graphics")]
     use MaterialAnimationFixture;
     #[cfg(feature = "graphics")]
@@ -736,7 +792,7 @@ mod test {
 
         assert!(
             AmethystApplication::blank()
-                .with_state(state_fns)
+                .with_state((), state_fns)
                 .run()
                 .is_ok()
         );
@@ -744,9 +800,9 @@ mod test {
 
     #[test]
     fn assertion_push_with_loading_state_with_add_resource_succeeds() {
-        // Alternative to embedding the `FunctionState` is to switch to a `PopState` but still
+        // Alternative to embedding the `FunctionState` is to switch to a `ReturnState` but still
         // provide the assertion function
-        let state_fns = || LoadingState::new(PopState);
+        let state_fns = || LoadingState::new(ReturnState(Trans::Pop));
         let assertion_fn = |world: &mut World| {
             world.read_resource::<LoadResource>();
         };
@@ -784,14 +840,13 @@ mod test {
     fn assertion_push_with_loading_state_without_add_resource_should_panic() {
         // Alternative to embedding the `FunctionState` is to switch to a `PopState` but still
         // provide the assertion function
-        let state_fns = || SwitchState::new(PopState);
         let assertion_fn = |world: &mut World| {
             world.read_resource::<LoadResource>();
         };
 
         assert!(
             AmethystApplication::blank()
-                .with_state(state_fns)
+                .with_state(1, SwitchState::new(PopState))
                 .with_assertion(assertion_fn)
                 .run()
                 .is_ok()

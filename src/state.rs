@@ -2,7 +2,7 @@
 
 use amethyst_input::is_close_requested;
 
-use crate::{ecs::prelude::World, GameData, StateEvent};
+use crate::{ecs::prelude::World, game_data::GameData, StateEvent};
 
 use std::fmt::Result as FmtResult;
 use std::fmt::{Display, Formatter};

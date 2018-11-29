@@ -56,6 +56,7 @@ json = [
 saveload = [
     "amethyst_core/saveload"
 ]
+dynamic_app = []
 
 [dependencies]
 amethyst_animation = { path = "amethyst_animation", version = "0.4.0" }

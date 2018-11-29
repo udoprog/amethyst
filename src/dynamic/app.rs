@@ -3,10 +3,8 @@
 use std::{error::Error as StdError, marker::PhantomData, path::Path, sync::Arc, time::Duration};
 
 use crate::{
-    core::{
-        specs::prelude::{Dispatcher, DispatcherBuilder},
-        SystemBundle,
-    },
+    core::SystemBundle,
+    game_data::{DataInit, GameData},
     renderer::pipe::pass::Pass,
     shred::{Resource, System},
 };
@@ -108,8 +106,7 @@ pub type Application<'res, 'threadlocal, S> =
     CoreApplication<'res, 'threadlocal, S, StateEvent, StateEventReader>;
 
 /// The builder of an [Application](struct.Application.html) with default Event parameters.
-pub type ApplicationBuilder<'res, 'threadlocal, S> =
-    CoreApplicationBuilder<'res, 'threadlocal, S, StateEvent, StateEventReader>;
+pub type ApplicationBuilder<S> = CoreApplicationBuilder<S, StateEvent, StateEventReader>;
 
 /// `CoreApplication` is the application implementation for the game engine. This is fully generic
 /// over the state type and event type.
@@ -142,7 +139,7 @@ where
     states: StateMachine<S, E>,
     ignore_window_close: bool,
     #[derivative(Debug = "ignore")]
-    dispatcher: Dispatcher<'res, 'threadlocal>,
+    game_data: GameData<'res, 'threadlocal>,
 }
 
 impl<'res, 'threadlocal, S> CoreApplication<'res, 'threadlocal, S, StateEvent, StateEventReader>
@@ -180,18 +177,23 @@ where
     ///
     /// Application will return an error if the internal thread pool fails
     /// to initialize correctly because of systems resource limitations
-    pub fn new<P>(path: P, initial_state: S) -> Result<Application<'res, 'threadlocal, S>>
+    pub fn new<P, I>(
+        path: P,
+        initial_state: S,
+        init: I,
+    ) -> Result<Application<'res, 'threadlocal, S>>
     where
         P: AsRef<Path>,
+        I: DataInit<GameData<'res, 'threadlocal>>,
     {
-        Self::build(path, initial_state)?.build()
+        Self::build(path, initial_state)?.build(init)
     }
 
     /// Creates a new ApplicationBuilder with the given initial game state.
     ///
     /// This is identical in function to
     /// [ApplicationBuilder::new](struct.ApplicationBuilder.html#method.new).
-    pub fn build<P>(path: P, initial_state: S) -> Result<ApplicationBuilder<'res, 'threadlocal, S>>
+    pub fn build<P>(path: P, initial_state: S) -> Result<ApplicationBuilder<S>>
     where
         P: AsRef<Path>,
     {
@@ -354,7 +356,7 @@ where
 
             #[cfg(feature = "profiler")]
             profile_scope!("update");
-            self.dispatcher.dispatch(&self.world.res);
+            self.game_data.update(&self.world);
             self.states.update(&mut self.world);
         }
 
@@ -389,7 +391,7 @@ impl<S, E, R> Drop for CoreApplication<'_, '_, S, E, R> {
 /// `CoreApplicationBuilder` is an interface that allows for creation of an
 /// [`Application`](struct.Application.html) using a custom set of configuration.
 /// This is the typical way an [`Application`](struct.Application.html) object is created.
-pub struct CoreApplicationBuilder<'res, 'threadlocal, S, E = StateEvent, R = StateEventReader>
+pub struct CoreApplicationBuilder<S, E = StateEvent, R = StateEventReader>
 where
     S: State<E>,
 {
@@ -397,12 +399,10 @@ where
     pub world: World,
     ignore_window_close: bool,
     states: StateMachine<S, E>,
-    disp_builder: DispatcherBuilder<'res, 'threadlocal>,
     phantom: PhantomData<R>,
 }
 
-impl<'res, 'threadlocal, S>
-    CoreApplicationBuilder<'res, 'threadlocal, S, StateEvent, StateEventReader>
+impl<S> CoreApplicationBuilder<S, StateEvent, StateEventReader>
 where
     S: State<StateEvent>,
 {
@@ -433,7 +433,7 @@ where
     }
 }
 
-impl<'res, 'threadlocal, S, E, R> CoreApplicationBuilder<'res, 'threadlocal, S, E, R>
+impl<S, E, R> CoreApplicationBuilder<S, E, R>
 where
     S: 'static + Clone + Send + Sync + State<E>,
 {
@@ -542,7 +542,6 @@ where
             world,
             ignore_window_close: false,
             states: StateMachine::<S, E>::new(initial_state),
-            disp_builder: DispatcherBuilder::new(),
             phantom: PhantomData,
         })
     }
@@ -554,225 +553,6 @@ where
     {
         self.states.register_callback(state, callback)?;
         Ok(self)
-    }
-
-    /// Inserts a barrier which assures that all systems added before the
-    /// barrier are executed before the ones after this barrier.
-    ///
-    /// Does nothing if there were no systems added since the last call to
-    /// `with_barrier()`. Thread-local systems are not affected by barriers;
-    /// they're always executed at the end.
-    ///
-    /// # Returns
-    ///
-    /// This function returns CoreApplicationBuilder after it has modified it.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use amethyst::prelude::dynamic::Application;
-    /// use amethyst::ecs::prelude::System;
-    ///
-    /// struct NopSystem;
-    /// impl<'r> System<'r> for NopSystem {
-    ///     type SystemData = ();
-    ///     fn run(&mut self, (): Self::SystemData) {}
-    /// }
-    ///
-    /// // Three systems are added in this example. The "tabby cat" & "tom cat"
-    /// // systems will both run in parallel. Only after both cat systems have
-    /// // run is the "doggo" system permitted to run them.
-    /// # fn main() -> amethyst::Result<()> {
-    /// Application::build("./assets", ())?
-    ///     .with(NopSystem, "tabby cat", &[])
-    ///     .with(NopSystem, "tom cat", &[])
-    ///     .with_barrier()
-    ///     .with(NopSystem, "doggo", &[]);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn with_barrier(mut self) -> Self {
-        self.disp_builder.add_barrier();
-        self
-    }
-
-    /// Adds a given system.
-    ///
-    /// __Note:__ all dependencies must be added before you add the system.
-    ///
-    /// # Parameters
-    ///
-    /// - `system`: The system that is to be added to the game loop.
-    /// - `name`: A unique string to identify the system by. This is used for
-    ///         dependency tracking. This name may be empty `""` string in which
-    ///         case it cannot be referenced as a dependency.
-    /// - `dependencies`: A list of named system that _must_ have completed running
-    ///                 before this system is permitted to run.
-    ///                 This may be an empty list if there is no dependencies.
-    ///
-    /// # Returns
-    ///
-    /// This function returns ApplicationBuilder after it has modified it.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `S`: A type that implements the `System` trait.
-    ///
-    /// # Panics
-    ///
-    /// If two system are added that share an identical name, this function will panic.
-    /// Empty names are permitted, and this function will not panic if more then two are added.
-    ///
-    /// If a dependency is referenced (by name), but has not previously been added this
-    /// function will panic.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use amethyst::prelude::dynamic::Application;
-    /// use amethyst::ecs::prelude::System;
-    ///
-    /// struct NopSystem;
-    /// impl<'r> System<'r> for NopSystem {
-    ///     type SystemData = ();
-    ///     fn run(&mut self, _: Self::SystemData) {}
-    /// }
-    ///
-    /// # fn main() -> amethyst::Result<()> {
-    /// Application::build("./assets", ())?
-    ///     // This will add the "foo" system to the game loop, in this case
-    ///     // the "foo" system will not depend on any systems.
-    ///     .with(NopSystem, "foo", &[])
-    ///     // The "bar" system will only run after the "foo" system has completed
-    ///     .with(NopSystem, "bar", &["foo"])
-    ///     // It is legal to register a system with an empty name
-    ///     .with(NopSystem, "", &[]);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn with<T>(mut self, system: T, name: &str, dependencies: &[&str]) -> Self
-    where
-        for<'r> T: 'static + System<'r> + Send,
-    {
-        self.disp_builder.add(system, name, dependencies);
-        self
-    }
-
-    /// Add a given thread-local system.
-    ///
-    /// A thread-local system is one that _must_ run on the main thread of the
-    /// game. A thread-local system would be necessary typically to work
-    /// around vendor APIs that have thread dependent designs; an example
-    /// being OpenGL which uses a thread-local state machine to function.
-    ///
-    /// All thread-local systems are executed sequentially after all
-    /// non-thread-local systems.
-    ///
-    /// # Parameters
-    ///
-    /// - `system`: The system that is to be added to the game loop.
-    ///
-    /// # Returns
-    ///
-    /// This function returns ApplicationBuilder after it has modified it.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `T`: A type that implements the `System` trait.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use amethyst::{
-    ///   prelude::dynamic::Application,
-    ///   ecs::prelude::System,
-    /// };
-    ///
-    /// struct NopSystem;
-    /// impl<'r> System<'r> for NopSystem {
-    ///     type SystemData = ();
-    ///
-    ///     fn run(&mut self, _: Self::SystemData) {}
-    /// }
-    ///
-    /// # fn main() -> amethyst::Result<()> {
-    /// Application::build("./assets", ())?
-    ///     // the Nop system is registered here
-    ///     .with_thread_local(NopSystem);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn with_thread_local<T>(mut self, system: T) -> Self
-    where
-        for<'r> T: 'static + System<'r>,
-    {
-        self.disp_builder.add_thread_local(system);
-        self
-    }
-
-    /// Add a given ECS bundle to the game loop.
-    ///
-    /// A bundle is a container for registering a bunch of ECS systems at once.
-    ///
-    /// # Parameters
-    ///
-    /// - `bundle`: The bundle to add
-    ///
-    /// # Returns
-    ///
-    /// This function returns ApplicationBuilder after it has modified it, this is
-    /// wrapped in a `Result`.
-    ///
-    /// # Errors
-    ///
-    /// This function creates systems, which use any number of dependent crates or APIs, which
-    /// could result in any number of errors.
-    /// See each individual bundle for a description of the errors it could produce.
-    ///
-    pub fn with_bundle<B>(mut self, bundle: B) -> Result<Self>
-    where
-        B: SystemBundle<'res, 'threadlocal>,
-    {
-        bundle.build(&mut self.disp_builder).map_err(Error::Core)?;
-        Ok(self)
-    }
-
-    /// Create a basic renderer with a single given `Pass`, and optional support for the `DrawUi` pass.
-    ///
-    /// Will set the clear color to black.
-    ///
-    /// ### Parameters:
-    ///
-    /// - `path`: Path to the `DisplayConfig` configuration file
-    /// - `pass`: The single pass in the render graph
-    /// - `with_ui`: If set to true, will add the UI render pass
-    pub fn with_basic_renderer<A, P>(self, path: A, pass: P, with_ui: bool) -> Result<Self>
-    where
-        A: AsRef<Path>,
-        P: 'static + Pass,
-    {
-        use crate::{
-            config::Config,
-            renderer::{DisplayConfig, Pipeline, RenderBundle, Stage},
-            ui::DrawUi,
-        };
-        let config = DisplayConfig::load(path);
-        if with_ui {
-            let pipe = Pipeline::build().with_stage(
-                Stage::with_backbuffer()
-                    .clear_target([0.0, 0.0, 0.0, 1.0], 1.0)
-                    .with_pass(pass)
-                    .with_pass(DrawUi::new()),
-            );
-            self.with_bundle(RenderBundle::new(pipe, Some(config)))
-        } else {
-            let pipe = Pipeline::build().with_stage(
-                Stage::with_backbuffer()
-                    .clear_target([0.0, 0.0, 0.0, 1.0], 1.0)
-                    .with_pass(pass),
-            );
-            self.with_bundle(RenderBundle::new(pipe, Some(config)))
-        }
     }
 
     /// Registers a component into the entity-component-system. This method
@@ -1035,18 +815,21 @@ where
     ///
     /// See the [example show for `ApplicationBuilder::new()`](struct.ApplicationBuilder.html#examples)
     /// for an example on how this method is used.
-    pub fn build(self) -> Result<CoreApplication<'res, 'threadlocal, S, E, R>>
+    pub fn build<'res, 'threadlocal, I>(
+        self,
+        init: I,
+    ) -> Result<CoreApplication<'res, 'threadlocal, S, E, R>>
     where
         E: Clone + Send + Sync + 'static,
         R: Default,
         for<'event> R: EventReader<'event, Event = E>,
+        I: DataInit<GameData<'res, 'threadlocal>>,
     {
         trace!("Entering `ApplicationBuilder::build`");
 
         let CoreApplicationBuilder {
             mut world,
             mut states,
-            disp_builder,
             ..
         } = self;
 
@@ -1063,8 +846,7 @@ where
         let trans_reader_id =
             world.exec(|mut ev: Write<'_, EventChannel<TransEvent<S>>>| ev.register_reader());
 
-        let mut dispatcher = disp_builder.build();
-        dispatcher.setup(&mut world.res);
+        let game_data = init.build(&mut world);
 
         states.register_global_callback(UpdateState);
 
@@ -1076,7 +858,7 @@ where
             trans_reader_id,
             states,
             ignore_window_close: self.ignore_window_close,
-            dispatcher,
+            game_data,
         });
 
         pub struct UpdateState;

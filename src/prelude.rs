@@ -7,12 +7,12 @@ pub use crate::{
     dynamic,
     ecs::prelude::{Builder, World},
     state_event::StateEvent,
+    game_data::{DataInit, GameData, GameDataBuilder},
 };
 
 #[cfg(not(feature = "dynamic_app"))]
 pub use crate::{
     app::{Application, ApplicationBuilder, CoreApplication},
-    game_data::{DataInit, GameData, GameDataBuilder},
     state::{
         EmptyState, EmptyTrans, SimpleState, SimpleTrans, State, StateData, StateMachine, Trans,
         TransEvent,

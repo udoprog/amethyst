@@ -5,7 +5,7 @@ pub mod state;
 mod trans;
 
 pub use self::{
-    app::{Application, ApplicationBuilder},
+    app::{Application, ApplicationBuilder, CoreApplication, CoreApplicationBuilder},
     state::{GlobalCallback, State, StateCallback, StateError, StateStorage},
     trans::{Trans, TransEvent},
 };

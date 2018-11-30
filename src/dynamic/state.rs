@@ -232,6 +232,23 @@ where
         Ok(())
     }
 
+    /// Register a callback associated with a specific state at runtime.
+    ///
+    /// This forcibly overrides any existing states and makes sure that the proper callbacks are
+    /// invoked.
+    pub fn runtime_register_boxed_callback(
+        &mut self,
+        state: S,
+        mut callback: Box<dyn StateCallback<S, E>>,
+        world: &mut World,
+    ) {
+        callback.on_start(world);
+
+        if let Some(mut old) = self.callbacks.insert(state, callback) {
+            old.on_stop(world);
+        }
+    }
+
     /// Register a global callback that is called on any state.
     ///
     /// A global callback received "global" events for this state machine, this includes:

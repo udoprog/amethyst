@@ -175,8 +175,6 @@ where
         self.initialize();
         self.world.write_resource::<Stopwatch>().start();
         while self.states.is_running() {
-            self.apply_new_states();
-
             self.advance_frame();
 
             self.world.write_resource::<FrameLimiter>().wait();
@@ -194,6 +192,7 @@ where
         self.shutdown();
     }
 
+    /// Apply any pending state machine modifications.
     fn apply_new_states(&mut self) {
         let mut new_states = SmallVec::<[NewState<S, E>; 16]>::new();
         self.world.write_resource::<States<S, E>>().drain_new_states(|n| new_states.push(n));
@@ -202,10 +201,14 @@ where
             return;
         }
 
+        let CoreApplication {
+            ref mut states,
+            ref mut world,
+            ..
+        } = *self;
+
         for (state, callback) in new_states {
-            if let Err(_) = self.states.register_boxed_callback(state.clone(), callback) {
-                panic!("State `{:?}` is already registered", state);
-            }
+            states.runtime_register_boxed_callback(state, callback, world);
         }
     }
 
@@ -327,6 +330,12 @@ where
             profile_scope!("update");
             self.game_data.update(&self.world);
             self.states.update(&mut self.world);
+        }
+
+        {
+            #[cfg(feature = "profiler")]
+            profile_scope!("apply_new_states");
+            self.apply_new_states();
         }
 
         #[cfg(feature = "profiler")]

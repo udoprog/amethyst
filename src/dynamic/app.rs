@@ -12,6 +12,7 @@ use rayon::ThreadPoolBuilder;
 #[cfg(feature = "profiler")]
 use thread_profiler::{register_thread_with_profiler, write_profile};
 use winit::Event;
+use smallvec::SmallVec;
 
 use crate::{
     assets::{Loader, Source},
@@ -23,7 +24,7 @@ use crate::{
         EventReader, Named,
     },
     dynamic::{
-        state::{GlobalCallback, State, StateCallback, StateMachine},
+        state::{GlobalCallback, State, StateCallback, StateMachine, NewState, States},
         trans::{Trans, TransEvent},
     },
     ecs::{
@@ -174,6 +175,8 @@ where
         self.initialize();
         self.world.write_resource::<Stopwatch>().start();
         while self.states.is_running() {
+            self.apply_new_states();
+
             self.advance_frame();
 
             self.world.write_resource::<FrameLimiter>().wait();
@@ -189,6 +192,21 @@ where
         }
 
         self.shutdown();
+    }
+
+    fn apply_new_states(&mut self) {
+        let mut new_states = SmallVec::<[NewState<S, E>; 16]>::new();
+        self.world.write_resource::<States<S, E>>().drain_new_states(|n| new_states.push(n));
+
+        if new_states.is_empty() {
+            return;
+        }
+
+        for (state, callback) in new_states {
+            if let Err(_) = self.states.register_boxed_callback(state.clone(), callback) {
+                panic!("State `{:?}` is already registered", state);
+            }
+        }
     }
 
     /// Sets up the application.
@@ -468,6 +486,9 @@ where
 
         let mut world = World::new();
 
+        // handling state transitions.
+        world.add_resource(States::<S, E>::default());
+        // communicate the current state with systems.
         world.add_resource(S::default());
 
         let thread_pool_builder = ThreadPoolBuilder::new();

@@ -15,7 +15,7 @@ pub use crate::{
     app::{Application, ApplicationBuilder, CoreApplication},
     state::{
         EmptyState, EmptyTrans, SimpleState, SimpleTrans, State, StateData, StateMachine, Trans,
-        TransEvent,
+        TransEvent, States,
     },
 };
 

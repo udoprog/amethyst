@@ -8,6 +8,38 @@ use std::fmt;
 use std::hash;
 use std::mem;
 
+/// The type of a new state.
+pub(crate) type NewState<S, E> = (S, Box<dyn StateCallback<S, E> + Send + Sync>);
+
+/// A resource used to indirectly manipulate the contents of the state machine.
+pub struct States<S, E> {
+    new_states: SmallVec<[NewState<S, E>; 16]>,
+}
+
+impl<S, E> Default for States<S, E> {
+    fn default() -> Self {
+        States {
+            new_states: Default::default(),
+        }
+    }
+}
+
+impl<S, E> States<S, E> {
+    /// Indicate that we want to create a new state.
+    pub fn new_state<C>(&mut self, state: S, callback: C)
+        where C: 'static + StateCallback<S, E> + Send + Sync
+    {
+        self.new_states.push((state, Box::new(callback)));
+    }
+
+    /// Drain all new states and push into the provided callback.
+    pub fn drain_new_states<C>(&mut self, mut c: C) where C: FnMut(NewState<S, E>) {
+        for new_state in self.new_states.drain() {
+            c(new_state)
+        }
+    }
+}
+
 /// Error type for errors occurring in StateMachine
 #[derive(Debug)]
 pub enum StateError {

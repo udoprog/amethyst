@@ -32,7 +32,7 @@ impl fmt::Display for StateError {
 }
 
 /// The trait associated with a stage.
-pub trait State<E>: fmt::Debug
+pub trait State<E>: Clone + Default + fmt::Debug
 where
     Self: Sized,
 {
@@ -170,10 +170,10 @@ where
     S: State<E>,
 {
     /// Creates a new state machine with the given initial state.
-    pub fn new(initial_state: S) -> StateMachine<S, E> {
+    pub fn new() -> StateMachine<S, E> {
         StateMachine {
             running: false,
-            stack: vec![initial_state],
+            stack: vec![],
             callbacks: Default::default(),
             global_callbacks: Default::default(),
         }
@@ -357,19 +357,18 @@ where
             return Ok(());
         }
 
-        let state = self
-            .stack
-            .last()
-            .ok_or_else(|| Error::DynamicStateMachine(StateError::NoStatesPresent))?;
+        let state = S::default();
 
-        if let Some(c) = self.callbacks.get_mut(state) {
+        if let Some(c) = self.callbacks.get_mut(&state) {
             c.on_start(world);
         }
 
-        self.running = true;
         for c in &mut self.global_callbacks {
             c.started(world);
         }
+
+        self.running = true;
+        self.stack.push(state);
         Ok(())
     }
 

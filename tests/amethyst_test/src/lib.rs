@@ -54,6 +54,7 @@
 //!     assert!(
 //!         AmethystApplication::blank()
 //!             .with_state("loading", LoadingState::new())
+//!             .do_state("loading")
 //!             .do_wait(1)
 //!             .do_fn(|world| {
 //!                 world.read_resource::<LoadResource>();
@@ -282,10 +283,11 @@
 //! fn system_increases_resource_value_by_one() {
 //!     assert!(
 //!         AmethystApplication::blank()
+//!             .with_state_system("system", MySystem, "my_system", &[])
+//!             .do_state("system")
 //!             .do_fn(|world| {
 //!                 world.add_resource(MyResource(0));
 //!             })
-//!             .with_state_system("system", MySystem, "my_system", &[])
 //!             .do_fn(|world| {
 //!                 let my_resource = world.read_resource::<MyResource>();
 //!

@@ -142,62 +142,20 @@ where
 
 impl<'res, 'threadlocal, S, E, R> CoreApplication<'res, 'threadlocal, S, E, R>
 where
-    S: 'static + Clone + Send + Sync + State<E>,
+    S: 'static + Send + Sync + State<E>,
     E: 'static + Clone + Send + Sync,
     R: Default,
     for<'event> R: EventReader<'event, Event = E>,
 {
-    /// Creates a new Application with the given initial game state.
-    /// This will create and allocate all the needed resources for
-    /// the event loop of the game engine. It is a shortcut for convenience
-    /// if you need more control over how the engine is configured you should
-    /// be using [build](struct.Application.html#method.build) instead.
-    ///
-    /// # Parameters
-    ///
-    /// - `path`: The default path for asset loading.
-    ///
-    /// - `initial_state`: The initial State handler of your game See
-    ///   [State](trait.State.html) for more information on what this is.
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` type wrapping the `Application` type. See
-    /// [errors](struct.Application.html#errors) for a full list of
-    /// possible errors that can happen in the creation of a Application object.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `P`: The path type for your standard asset path.
-    ///
-    /// - `S`: A type that implements the `State` trait. e.g. Your initial
-    ///        game logic.
-    ///
-    /// # Errors
-    ///
-    /// Application will return an error if the internal thread pool fails
-    /// to initialize correctly because of systems resource limitations
-    pub fn new<P, I>(
-        path: P,
-        initial_state: S,
-        init: I,
-    ) -> Result<CoreApplication<'res, 'threadlocal, S, E, R>>
-    where
-        P: AsRef<Path>,
-        I: DataInit<GameData<'res, 'threadlocal>>,
-    {
-        CoreApplicationBuilder::new(path, initial_state)?.build(init)
-    }
-
     /// Creates a new ApplicationBuilder with the given initial game state.
     ///
     /// This is identical in function to
     /// [ApplicationBuilder::new](struct.ApplicationBuilder.html#method.new).
-    pub fn build<P>(path: P, initial_state: S) -> Result<CoreApplicationBuilder<S, E, R>>
+    pub fn build<P>(path: P) -> Result<CoreApplicationBuilder<S, E, R>>
     where
         P: AsRef<Path>,
     {
-        CoreApplicationBuilder::new(path, initial_state)
+        CoreApplicationBuilder::new(path)
     }
 
     /// Run the gameloop until the game state indicates that the game is no
@@ -428,7 +386,7 @@ where
 
 impl<S, E, R> CoreApplicationBuilder<S, E, R>
 where
-    S: 'static + Clone + Send + Sync + State<E>,
+    S: 'static + Send + Sync + State<E>,
     E: Clone + Send + Sync + 'static,
     R: Default,
     for<'event> R: EventReader<'event, Event = E>,
@@ -483,7 +441,7 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new<P>(path: P, initial_state: S) -> Result<Self>
+    pub fn new<P>(path: P) -> Result<Self>
     where
         P: AsRef<Path>,
     {
@@ -510,7 +468,7 @@ where
 
         let mut world = World::new();
 
-        world.add_resource(initial_state.clone());
+        world.add_resource(S::default());
 
         let thread_pool_builder = ThreadPoolBuilder::new();
         #[cfg(feature = "profiler")]
@@ -534,12 +492,14 @@ where
 
         world.register::<Named>();
 
-        Ok(CoreApplicationBuilder {
+        let builder = CoreApplicationBuilder {
             world,
             ignore_window_close: false,
-            states: StateMachine::<S, E>::new(initial_state),
+            states: StateMachine::<S, E>::new(),
             phantom: PhantomData,
-        })
+        };
+
+        Ok(builder)
     }
 
     /// Register a callback associated with a specific state.

@@ -11,16 +11,22 @@ use amethyst::{
 
 use std::marker::PhantomData;
 
+#[derive(State, Clone, Debug)]
+enum State {
+    A,
+    B,
+}
+
 struct StateA;
 
-impl SimpleState<'static, 'static> for StateA {
-    fn update(&mut self, data: &mut StateData<GameData>) -> SimpleTrans<'static, 'static> {
+impl<S, E> StateCallback<S, E> for StateA {
+    fn update(&mut self, data: &mut World) -> SimpleTrans<'static, 'static> {
         println!("StateA::update()");
         // Shows how to push a `Trans` through the event queue.
         // If you do use TransQueue, you will be forced to use the 'static lifetime on your states.
-        data.world
+        world
             .write_resource::<EventChannel<TransEvent<GameData<'static, 'static>, StateEvent>>>()
-            .single_write(Box::new(|| Trans::Push(Box::new(StateB::default()))));
+            .single_write(Box::new(|| Trans::Push(State::B)));
 
         // You can also use normal Trans at the same time!
         // Those will be executed before the ones in the EventChannel
@@ -45,17 +51,22 @@ impl<'a> Default for StateB<'a> {
     }
 }
 
-impl<'a> SimpleState<'static, 'static> for StateB<'a> {
-    fn update(&mut self, data: &mut StateData<GameData>) -> SimpleTrans<'static, 'static> {
+impl<'a, S, E> StateCallback<S, E> for StateB<'a> {
+    fn update(&mut self, data: &mut World) -> SimpleTrans<'static, 'static> {
         println!("StateB::update()");
-        self.dispatcher.dispatch(&mut data.world.res);
+        self.dispatcher.dispatch(&mut world.res);
         Trans::Quit
     }
 }
 
 fn main() -> Result<(), Error> {
     amethyst::start_logger(Default::default());
-    let mut game = Application::build("./", StateA)?.build(GameDataBuilder::default())?;
+
+    let mut game = Application::build("./")?
+        .with_state(State::A, StateA::default())?
+        .with_state(State::B, StateB::default())?
+        .build(GameDataBuilder::default())?;
+
     game.run();
     Ok(())
 }

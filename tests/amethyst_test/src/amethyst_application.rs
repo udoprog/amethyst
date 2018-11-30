@@ -244,9 +244,7 @@ where
     where
         for<'b> R: EventReader<'b, Event = E>,
     {
-        let initial_state = states.first().map(|(s, _)| s.clone()).unwrap_or_default();
-
-        let mut application_builder = CoreApplication::build(Self::assets_dir(), initial_state)?;
+        let mut application_builder = CoreApplication::build(Self::assets_dir())?;
 
         for (state, callback) in states {
             let callback = callback.call();
@@ -759,6 +757,7 @@ mod test {
                 .with_state("assertion", FunctionState::new(|world: &mut World| {
                     world.read_resource::<LoadResource>();
                 }))
+                .do_state("loading")
                 .run()
                 .is_ok()
         );
@@ -776,6 +775,7 @@ mod test {
             AmethystApplication::blank()
                 .with_state("loading", LoadingState::new("return"))
                 .with_state("return", ReturnState(Trans::Pop))
+                .do_state("loading")
                 .do_wait(1)
                 // then assert
                 .do_fn(assertion_fn)
@@ -797,6 +797,8 @@ mod test {
             AmethystApplication::blank()
                 .with_state("state", switch_state)
                 .with_state("assertion", assertion)
+                .do_state("state")
+                .do_wait(1)
                 .run()
                 .is_ok()
         );
@@ -878,6 +880,7 @@ mod test {
                 .with_bundle(BundleAsset)
                 .with_state("loading", loading)
                 .with_state("inner", inner)
+                .do_state("loading")
                 .do_fn(setup_fns)
                 .do_fn(effect_fn)
                 .do_fn(assertion_fn)
@@ -989,6 +992,7 @@ mod test {
         assert!(
             AmethystApplication::<&str, _, _>::blank()
                 .with_state_system("effect", SystemEffect, "system_effect", &[])
+                .do_state("effect")
                 .do_fn(|world| {
                     world.register::<ComponentZero>();
 
@@ -1074,6 +1078,7 @@ mod test {
                 .with_state("first", FunctionState::new(|world| {
                     world.add_resource(ApplicationResource);
                 }))
+                .do_state("first")
                 .do_wait(1)
                 .do_fn(|world| {
                     world.read_resource::<ApplicationResource>();

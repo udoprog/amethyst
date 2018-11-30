@@ -61,11 +61,15 @@ impl SimpleFormat<Mesh> for Custom {
     }
 }
 
+#[derive(State, Debug, Clone)]
+enum State {
+    Example,
+}
+
 struct AssetsExample;
 
-impl<'a, 'b> SimpleState<'a, 'b> for AssetsExample {
-    fn on_start(&mut self, data: StateData<GameData>) {
-        let StateData { world, .. } = data;
+impl<S, E> StateCallback<S, E> for AssetsExample {
+    fn on_start(&mut self, world: &mut World) {
         world.add_resource(0usize);
 
         initialise_camera(world);
@@ -119,7 +123,11 @@ fn main() -> Result<(), Error> {
         .with_bundle(TransformBundle::new())?
         .with_basic_renderer(display_config_path, DrawShaded::<PosNormTex>::new(), false)?;
 
-    let mut game = Application::new(resources_directory, AssetsExample, game_data)?;
+    let mut game = Application::build(resources_directory, State::Example)?
+        .with_defaults()
+        .with_state(State::Example, AssetsExample)?
+        .build(game_data)?;
+
     game.run();
     Ok(())
 }

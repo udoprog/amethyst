@@ -18,6 +18,9 @@ pub fn impl_state(ast: &DeriveInput) -> TokenStream {
     let mut insert_variants = Vec::new();
     let mut names = Vec::new();
 
+    let first = en.variants
+        .iter().next().expect("enum must have at least one variant").ident.clone();
+
     for (i, variant) in en.variants.iter().enumerate() {
         match variant.fields {
             Fields::Unit => {}
@@ -38,6 +41,12 @@ pub fn impl_state(ast: &DeriveInput) -> TokenStream {
     let names = &names;
 
     quote! {
+        impl Default for #base {
+            fn default() -> #base {
+                #base::#first
+            }
+        }
+
         #[allow(non_camel_case_types)]
         pub struct #storage<E> {
             #(#fields,)*

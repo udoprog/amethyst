@@ -51,10 +51,8 @@ struct ScenePrefabData {
     fly_tag: Option<ControlTagPrefab>,
 }
 
-impl<'a, 'b> SimpleState<'a, 'b> for Example {
-    fn on_start(&mut self, data: StateData<GameData>) {
-        let StateData { world, .. } = data;
-
+impl<S, E> StateCallback<S, E> for Example {
+    fn on_start(&mut self, world: &mut World) {
         self.progress = Some(ProgressCounter::default());
 
         world.exec(
@@ -206,7 +204,10 @@ fn main() -> Result<(), amethyst::Error> {
             "sampler_interpolation",
         ]))?;
 
-    let mut game = Application::build(resources_directory, Example::default())?.build(game_data)?;
+    let mut game = Application::build(resources_directory)?
+        .with_state((), Example::default())?
+        .build(game_data)?;
+
     game.run();
     Ok(())
 }

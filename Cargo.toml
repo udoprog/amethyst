@@ -192,9 +192,10 @@ path = "examples/appendix_a/main.rs"
 name = "locale"
 path = "examples/locale/main.rs"
 
-[[example]]
-name = "custom_game_data"
-path = "examples/custom_game_data/main.rs"
+# Note: example is defunct
+# [[example]]
+# name = "custom_game_data"
+# path = "examples/custom_game_data/main.rs"
 
 [[example]]
 name = "arc_ball_camera"

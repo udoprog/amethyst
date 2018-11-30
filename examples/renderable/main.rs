@@ -3,7 +3,7 @@
 //!
 //! TODO: Rewrite for new renderer.
 
-#[macro_rules]
+#[macro_use]
 extern crate amethyst;
 
 use amethyst::{
@@ -47,7 +47,7 @@ struct Example {
     scene: Handle<Prefab<MyPrefabData>>,
 }
 
-impl<S, E> StateCallback<S, E> for Loading {
+impl StateCallback<State, StateEvent> for Loading {
     fn on_start(&mut self, world: &mut World) {
         self.prefab = Some(world.exec(|loader: PrefabLoader<MyPrefabData>| {
             loader.load("prefab/renderable.ron", RonFormat, (), &mut self.progress)
@@ -59,7 +59,7 @@ impl<S, E> StateCallback<S, E> for Loading {
         });
     }
 
-    fn update(&mut self, world: &mut World) -> SimpleTrans<'a, 'b> {
+    fn update(&mut self, world: &mut World) -> Trans<State> {
         match self.progress.complete() {
             Completion::Failed => {
                 println!("Failed loading assets: {:?}", self.progress.errors());
@@ -71,16 +71,21 @@ impl<S, E> StateCallback<S, E> for Loading {
                     let _ = world.delete_entity(entity);
                 }
 
-                Trans::NewState(State::Example, Box::new(Example {
-                    scene: self.prefab.as_ref().unwrap().clone(),
-                }))
+                world.write_resource::<States<_, _>>().new_state(
+                    State::Example,
+                    Example {
+                        scene: self.prefab.as_ref().unwrap().clone(),
+                    }
+                );
+
+                Trans::Push(State::Example)
             }
             Completion::Loading => Trans::None,
         }
     }
 }
 
-impl<S, E> StateCallback<S, E> for Example {
+impl StateCallback<State, StateEvent> for Example {
     fn on_start(&mut self, world: &mut World) {
         world.create_entity().with(self.scene.clone()).build();
     }
@@ -88,14 +93,14 @@ impl<S, E> StateCallback<S, E> for Example {
     fn handle_event(
         &mut self,
         world: &mut World,
-        event: StateEvent,
-    ) -> SimpleTrans<'a, 'b> {
-        if let StateEvent::Window(event) = &event {
+        event: &StateEvent,
+    ) -> Trans<State> {
+        if let StateEvent::Window(event) = event {
             // Exit if user hits Escape or closes the window
-            if is_close_requested(&event) || is_key_down(&event, VirtualKeyCode::Escape) {
+            if is_close_requested(event) || is_key_down(event, VirtualKeyCode::Escape) {
                 return Trans::Quit;
             }
-            match get_key(&event) {
+            match get_key(event) {
                 Some((VirtualKeyCode::R, ElementState::Pressed)) => {
                     world.exec(|mut state: Write<DemoState>| {
                         state.light_color = [0.8, 0.2, 0.2, 1.0];
@@ -193,7 +198,6 @@ fn main() -> Result<(), Error> {
 
     let mut game = Application::build(resources_directory)?
         .with_state(State::Loading, Loading::default())?
-        .with_state(State::Example, Example::default())?
         .build(game_data)?;
 
     game.run();

@@ -6,6 +6,9 @@ pub(crate) mod trans;
 
 pub use self::{
     app::{Application, ApplicationBuilder, CoreApplication, CoreApplicationBuilder},
-    state::{GlobalCallback, State, StateCallback, StateError, StateMachine, StateStorage, States},
+    state::{
+        GlobalCallback, MapStateStorage, SingletonStateStorage, State, StateCallback, StateError,
+        StateMachine, StateStorage, States,
+    },
     trans::{Trans, TransEvent},
 };

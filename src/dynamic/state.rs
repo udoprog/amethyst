@@ -68,16 +68,20 @@ impl fmt::Display for StateError {
 }
 
 /// The trait associated with a stage.
-pub trait State<E>: Clone + Default + fmt::Debug
+///
+/// # Type Parameters
+///
+/// - `E`: The event associated with the state.
+pub trait State<E, T = Self>: Clone + Default + fmt::Debug
 where
     Self: Sized,
 {
     /// The storage used for storing callbacks for the given state.
-    type Storage: Default + StateStorage<Self, E>;
+    type Storage: StateStorage<Self, T, E>;
 }
 
 /// Provides access to storage for states.
-pub trait StateStorage<S, E>
+pub trait StateStorage<S, T, E>: Default
 where
     Self: Sized,
 {
@@ -85,16 +89,16 @@ where
     fn insert(
         &mut self,
         state: S,
-        callback: Box<dyn StateCallback<S, E>>,
-    ) -> Option<Box<dyn StateCallback<S, E>>>;
+        callback: Box<dyn StateCallback<T, E>>,
+    ) -> Option<Box<dyn StateCallback<T, E>>>;
 
     /// Get mutable storage for the given state.
-    fn get_mut(&mut self, value: &S) -> Option<&mut Box<dyn StateCallback<S, E>>>;
+    fn get_mut(&mut self, value: &S) -> Option<&mut Box<dyn StateCallback<T, E>>>;
 
     /// Apply the specified function to all values.
     fn do_values<F>(&mut self, apply: F)
     where
-        F: FnMut(&mut Box<dyn StateCallback<S, E>>);
+        F: FnMut(&mut Box<dyn StateCallback<T, E>>);
 }
 
 /// A callback that is registered for all events.
@@ -681,32 +685,32 @@ where
 }
 
 /// Storage implementation for types which only have one value.
-pub struct SingletonStateStorage<S, E> {
-    callback: Option<Box<dyn StateCallback<S, E>>>,
+pub struct SingletonStateStorage<T, E> {
+    callback: Option<Box<dyn StateCallback<T, E>>>,
 }
 
-impl<S, E> Default for SingletonStateStorage<S, E> {
+impl<T, E> Default for SingletonStateStorage<T, E> {
     fn default() -> Self {
         SingletonStateStorage { callback: None }
     }
 }
 
-impl<S, E> StateStorage<S, E> for SingletonStateStorage<S, E> {
+impl<S, T, E> StateStorage<S, T, E> for SingletonStateStorage<T, E> {
     fn insert(
         &mut self,
         _: S,
-        callback: Box<dyn StateCallback<S, E>>,
-    ) -> Option<Box<dyn StateCallback<S, E>>> {
+        callback: Box<dyn StateCallback<T, E>>,
+    ) -> Option<Box<dyn StateCallback<T, E>>> {
         mem::replace(&mut self.callback, Some(callback))
     }
 
-    fn get_mut(&mut self, _: &S) -> Option<&mut Box<dyn StateCallback<S, E>>> {
+    fn get_mut(&mut self, _: &S) -> Option<&mut Box<dyn StateCallback<T, E>>> {
         self.callback.as_mut()
     }
 
     fn do_values<F>(&mut self, mut apply: F)
     where
-        F: FnMut(&mut Box<dyn StateCallback<S, E>>),
+        F: FnMut(&mut Box<dyn StateCallback<T, E>>),
     {
         if let Some(c) = self.callback.as_mut() {
             apply(c);
@@ -715,32 +719,32 @@ impl<S, E> StateStorage<S, E> for SingletonStateStorage<S, E> {
 }
 
 /// Storage implementation for types which can be hashed.
-pub struct MapStateStorage<S, E>
+pub struct MapStateStorage<S, T, E>
 where
     S: hash::Hash + PartialEq + Eq,
 {
-    callbacks: hashbrown::HashMap<S, Box<dyn StateCallback<S, E>>>,
+    callbacks: hashbrown::HashMap<S, Box<dyn StateCallback<T, E>>>,
 }
 
-impl<S, E> StateStorage<S, E> for MapStateStorage<S, E>
+impl<S, T, E> StateStorage<S, T, E> for MapStateStorage<S, T, E>
 where
     S: hash::Hash + PartialEq + Eq,
 {
     fn insert(
         &mut self,
         state: S,
-        callback: Box<dyn StateCallback<S, E>>,
-    ) -> Option<Box<dyn StateCallback<S, E>>> {
+        callback: Box<dyn StateCallback<T, E>>,
+    ) -> Option<Box<dyn StateCallback<T, E>>> {
         self.callbacks.insert(state, callback)
     }
 
-    fn get_mut(&mut self, state: &S) -> Option<&mut Box<dyn StateCallback<S, E>>> {
+    fn get_mut(&mut self, state: &S) -> Option<&mut Box<dyn StateCallback<T, E>>> {
         self.callbacks.get_mut(state)
     }
 
     fn do_values<F>(&mut self, mut apply: F)
     where
-        F: FnMut(&mut Box<dyn StateCallback<S, E>>),
+        F: FnMut(&mut Box<dyn StateCallback<T, E>>),
     {
         for c in self.callbacks.values_mut() {
             apply(c);
@@ -748,7 +752,7 @@ where
     }
 }
 
-impl<S, E> Default for MapStateStorage<S, E>
+impl<S, T, E> Default for MapStateStorage<S, T, E>
 where
     S: hash::Hash + PartialEq + Eq,
 {
@@ -766,14 +770,14 @@ impl<E> State<E> for () {
 /// Helper macro to implement storage for certain types.
 macro_rules! impl_map_storage {
     ($lt:lifetime, $ty:ty) => {
-        impl<$lt, E> State<E> for &$lt $ty {
-            type Storage = MapStateStorage<Self, E>;
+        impl<$lt, E, T> State<E, T> for &$lt $ty {
+            type Storage = MapStateStorage<Self, T, E>;
         }
     };
 
     ($ty:ty) => {
-        impl<E> State<E> for $ty {
-            type Storage = MapStateStorage<Self, E>;
+        impl<E, T> State<E, T> for $ty {
+            type Storage = MapStateStorage<Self, T, E>;
         }
     };
 }

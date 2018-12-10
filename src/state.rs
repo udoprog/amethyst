@@ -26,14 +26,14 @@ impl<S, E> Default for States<S, E> {
 
 impl<S, E> States<S, E> {
     /// Indicate that we want to create a new state.
-    pub fn new_state<C>(&mut self, state: S, callback: C)
+    pub fn new_state<C>(&mut self, state: S, handler: C)
     where
         C: 'static + StateHandler<S, E> + Send + Sync,
     {
-        self.new_states.push((state, Box::new(callback)));
+        self.new_states.push((state, Box::new(handler)));
     }
 
-    /// Drain all new states and push into the provided callback.
+    /// Drain all new states and push into the provided handler.
     pub fn drain_new_states<C>(&mut self, mut c: C)
     where
         C: FnMut(NewState<S, E>),
@@ -61,7 +61,7 @@ impl fmt::Display for StateError {
                 "Tried to start state machine without any states present"
             ),
             StateError::CallbackConflict => {
-                write!(fmt, "Tried to register conflicting callback for state.")
+                write!(fmt, "Tried to register conflicting handler for state.")
             }
         }
     }
@@ -78,7 +78,7 @@ pub trait State<E, T = Box<dyn StateHandler<Self, E>>>: Clone + Default + fmt::D
 where
     Self: Sized,
 {
-    /// The storage used for storing callbacks for the given state.
+    /// The storage used for storing handlers for the given state.
     type Storage: StateStorage<Self, T>;
 }
 
@@ -87,8 +87,8 @@ pub trait StateStorage<S, T>: Default
 where
     Self: Sized,
 {
-    /// Insert the given callback, returning an existing callback if it is already present.
-    fn insert(&mut self, state: S, callback: T) -> Option<T>;
+    /// Insert the given handler, returning an existing handler if it is already present.
+    fn insert(&mut self, state: S, handler: T) -> Option<T>;
 
     /// Get mutable storage for the given state.
     fn get_mut(&mut self, value: &S) -> Option<&mut T>;
@@ -99,7 +99,7 @@ where
         F: FnMut(&mut T);
 }
 
-/// A callback that is registered for all events.
+/// A handler that is registered for all events.
 /// This is typically used for bookkeeping specific things.
 pub trait GlobalHandler<S, E> {
     /// Fired when state machine has been started.
@@ -113,7 +113,7 @@ pub trait GlobalHandler<S, E> {
 
     /// Fired on events.
     ///
-    /// If multiple callbacks would result in a state transition, they will be applied one after
+    /// If multiple handlers would result in a state transition, they will be applied one after
     /// another in an undetermined order.
     fn handle_event(&mut self, _: &mut World, _: &E) -> Trans<S> {
         Trans::None
@@ -130,7 +130,7 @@ pub trait GlobalHandler<S, E> {
     }
 }
 
-/// A callback that is registered for a specific state.
+/// A handler that is registered for a specific state.
 pub trait StateHandler<S, E> {
     /// Executed when the game state begins.
     fn on_start(&mut self, _: &mut World) {}
@@ -178,10 +178,10 @@ pub trait StateHandler<S, E> {
     }
 }
 
-/// How many callbacks that are inlined.
+/// How many handlers that are inlined.
 const INLINED_CALLBACKS: usize = 16;
 
-/// Type alias for a collection of global callbacks.
+/// Type alias for a collection of global handlers.
 type GlobalHandlers<S, E> = SmallVec<[Box<dyn GlobalHandler<S, E>>; INLINED_CALLBACKS]>;
 
 /// A simple stack-based state machine (pushdown automaton).
@@ -195,10 +195,10 @@ where
     /// The stack of the state machine.
     #[derivative(Debug = "ignore")]
     stack: Vec<S>,
-    /// Callbacks fired on particular states.
+    /// handlers fired on particular states.
     #[derivative(Debug = "ignore")]
-    callbacks: S::Storage,
-    /// Callbacks fired on any state.
+    handlers: S::Storage,
+    /// handlers fired on any state.
     #[derivative(Debug = "ignore")]
     global_callbacks: GlobalHandlers<S, E>,
 }
@@ -212,52 +212,52 @@ where
         StateMachine {
             running: false,
             stack: vec![],
-            callbacks: Default::default(),
+            handlers: Default::default(),
             global_callbacks: Default::default(),
         }
     }
 
-    /// Register a callback associated with a specific state.
-    pub fn register_callback<C: 'static>(&mut self, state: S, callback: C) -> Result<(), Error>
+    /// Register a handler associated with a specific state.
+    pub fn register_callback<C: 'static>(&mut self, state: S, handler: C) -> Result<(), Error>
     where
         C: StateHandler<S, E>,
     {
-        self.register_boxed_callback(state, Box::new(callback))
+        self.register_boxed_callback(state, Box::new(handler))
     }
 
-    /// Register a callback associated with a specific state.
+    /// Register a handler associated with a specific state.
     pub fn register_boxed_callback(
         &mut self,
         state: S,
-        callback: Box<dyn StateHandler<S, E>>,
+        handler: Box<dyn StateHandler<S, E>>,
     ) -> Result<(), Error> {
-        if self.callbacks.insert(state, callback).is_some() {
+        if self.handlers.insert(state, handler).is_some() {
             return Err(Error::StateMachine(StateError::CallbackConflict));
         }
 
         Ok(())
     }
 
-    /// Register a callback associated with a specific state at runtime.
+    /// Register a handler associated with a specific state at runtime.
     ///
-    /// This forcibly overrides any existing states and makes sure that the proper callbacks are
+    /// This forcibly overrides any existing states and makes sure that the proper handlers are
     /// invoked.
     pub fn runtime_register_boxed_callback(
         &mut self,
         state: S,
-        mut callback: Box<dyn StateHandler<S, E>>,
+        mut handler: Box<dyn StateHandler<S, E>>,
         world: &mut World,
     ) {
-        callback.on_start(world);
+        handler.on_start(world);
 
-        if let Some(mut old) = self.callbacks.insert(state, callback) {
+        if let Some(mut old) = self.handlers.insert(state, handler) {
             old.on_stop(world);
         }
     }
 
-    /// Register a global callback that is called on any state.
+    /// Register a global handler that is called on any state.
     ///
-    /// A global callback received "global" events for this state machine, this includes:
+    /// A global handler received "global" events for this state machine, this includes:
     ///
     /// * When it is started.
     /// * When it is stopped.
@@ -356,16 +356,16 @@ where
     /// # Ok(())
     /// # }
     /// ```
-    pub fn register_global<C: 'static>(&mut self, callback: C)
+    pub fn register_global<C: 'static>(&mut self, handler: C)
     where
         C: GlobalHandler<S, E>,
     {
-        self.register_boxed_global(Box::new(callback));
+        self.register_boxed_global(Box::new(handler));
     }
 
-    /// Register a boxed global callback that is called on any state.
-    pub fn register_boxed_global(&mut self, callback: Box<dyn GlobalHandler<S, E>>) {
-        self.global_callbacks.push(callback);
+    /// Register a boxed global handler that is called on any state.
+    pub fn register_boxed_global(&mut self, handler: Box<dyn GlobalHandler<S, E>>) {
+        self.global_callbacks.push(handler);
     }
 
     /// Checks whether the state machine is running.
@@ -405,7 +405,7 @@ where
 
         let state = S::default();
 
-        if let Some(c) = self.callbacks.get_mut(&state) {
+        if let Some(c) = self.handlers.get_mut(&state) {
             c.on_start(world);
         }
 
@@ -457,7 +457,7 @@ where
     /// states.start(&mut world);
     /// assert_eq!(*capture.borrow(), None);
     ///
-    /// // Nothing happen because no callback is registered for the initial state.
+    /// // Nothing happen because no handler is registered for the initial state.
     /// states.handle_event(&mut world, Event("hello"));
     /// assert_eq!(*capture.borrow(), None);
     ///
@@ -473,13 +473,13 @@ where
             return;
         }
 
-        // Transition which have been requested by callbacks.
+        // Transition which have been requested by handlers.
         let mut trans = Trans::None;
 
         {
             let StateMachine {
                 ref mut stack,
-                ref mut callbacks,
+                ref mut handlers,
                 ref mut global_callbacks,
                 ..
             } = *self;
@@ -488,7 +488,7 @@ where
                 trans.update(c.handle_event(world, &event));
             }
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
+            if let Some(c) = stack.last().and_then(|s| handlers.get_mut(s)) {
                 trans.update(c.handle_event(world, &event));
             }
         }
@@ -502,13 +502,13 @@ where
             return;
         }
 
-        // Transition which have been requested by callbacks.
+        // Transition which have been requested by handlers.
         let mut trans = Trans::None;
 
         {
             let StateMachine {
                 ref mut stack,
-                ref mut callbacks,
+                ref mut handlers,
                 ref mut global_callbacks,
                 ..
             } = *self;
@@ -518,11 +518,11 @@ where
             }
 
             // Fixed shadow updates for all states.
-            callbacks.do_values(|c| {
+            handlers.do_values(|c| {
                 trans.update(c.shadow_fixed_update(world));
             });
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(s)) {
+            if let Some(c) = stack.last().and_then(|s| handlers.get_mut(s)) {
                 trans.update(c.fixed_update(world));
             }
         }
@@ -536,28 +536,28 @@ where
             return;
         }
 
-        // Transition which have been requested by callbacks.
+        // Transition which have been requested by handlers.
         let mut trans = Trans::None;
 
         {
             let StateMachine {
                 ref mut stack,
-                ref mut callbacks,
+                ref mut handlers,
                 ref mut global_callbacks,
                 ..
             } = *self;
 
-            // Regular update for global callbacks.
+            // Regular update for global handlers.
             for c in global_callbacks {
                 trans.update(c.update(world));
             }
 
             // Shadow updates for all states.
-            callbacks.do_values(|c| {
+            handlers.do_values(|c| {
                 trans.update(c.shadow_update(world));
             });
 
-            if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
+            if let Some(c) = stack.last().and_then(|s| handlers.get_mut(&s)) {
                 trans.update(c.update(world));
             }
         }
@@ -586,11 +586,11 @@ where
             return;
         }
 
-        if let Some(c) = self.stack.pop().and_then(|s| self.callbacks.get_mut(&s)) {
+        if let Some(c) = self.stack.pop().and_then(|s| self.handlers.get_mut(&s)) {
             c.on_stop(world);
         }
 
-        if let Some(c) = self.callbacks.get_mut(&state) {
+        if let Some(c) = self.handlers.get_mut(&state) {
             c.on_start(world);
         }
 
@@ -609,15 +609,15 @@ where
 
         let StateMachine {
             ref mut stack,
-            ref mut callbacks,
+            ref mut handlers,
             ..
         } = *self;
 
-        if let Some(c) = stack.last().and_then(|s| callbacks.get_mut(&s)) {
+        if let Some(c) = stack.last().and_then(|s| handlers.get_mut(&s)) {
             c.on_pause(world);
         }
 
-        if let Some(c) = callbacks.get_mut(&state) {
+        if let Some(c) = handlers.get_mut(&state) {
             c.on_start(world);
         }
 
@@ -640,13 +640,13 @@ where
             None => return,
         };
 
-        if let Some(c) = self.callbacks.get_mut(&head) {
+        if let Some(c) = self.handlers.get_mut(&head) {
             c.on_stop(world);
         }
 
         match self.stack.last() {
             Some(current) => {
-                if let Some(c) = self.callbacks.get_mut(current) {
+                if let Some(c) = self.handlers.get_mut(current) {
                     c.on_resume(world);
                 }
 
@@ -670,7 +670,7 @@ where
             return;
         }
 
-        while let Some(c) = self.stack.pop().and_then(|s| self.callbacks.get_mut(&s)) {
+        while let Some(c) = self.stack.pop().and_then(|s| self.handlers.get_mut(&s)) {
             c.on_stop(world);
         }
 
@@ -684,29 +684,29 @@ where
 
 /// Storage implementation for types which only have one value.
 pub struct SingletonStateStorage<T> {
-    callback: Option<T>,
+    handler: Option<T>,
 }
 
 impl<T> Default for SingletonStateStorage<T> {
     fn default() -> Self {
-        SingletonStateStorage { callback: None }
+        SingletonStateStorage { handler: None }
     }
 }
 
 impl<S, T> StateStorage<S, T> for SingletonStateStorage<T> {
-    fn insert(&mut self, _: S, callback: T) -> Option<T> {
-        mem::replace(&mut self.callback, Some(callback))
+    fn insert(&mut self, _: S, handler: T) -> Option<T> {
+        mem::replace(&mut self.handler, Some(handler))
     }
 
     fn get_mut(&mut self, _: &S) -> Option<&mut T> {
-        self.callback.as_mut()
+        self.handler.as_mut()
     }
 
     fn do_values<F>(&mut self, mut apply: F)
     where
         F: FnMut(&mut T),
     {
-        if let Some(c) = self.callback.as_mut() {
+        if let Some(c) = self.handler.as_mut() {
             apply(c);
         }
     }
@@ -717,26 +717,26 @@ pub struct MapStateStorage<S, T>
 where
     S: hash::Hash + PartialEq + Eq,
 {
-    callbacks: hashbrown::HashMap<S, T>,
+    handlers: hashbrown::HashMap<S, T>,
 }
 
 impl<S, T> StateStorage<S, T> for MapStateStorage<S, T>
 where
     S: hash::Hash + PartialEq + Eq,
 {
-    fn insert(&mut self, state: S, callback: T) -> Option<T> {
-        self.callbacks.insert(state, callback)
+    fn insert(&mut self, state: S, handler: T) -> Option<T> {
+        self.handlers.insert(state, handler)
     }
 
     fn get_mut(&mut self, state: &S) -> Option<&mut T> {
-        self.callbacks.get_mut(state)
+        self.handlers.get_mut(state)
     }
 
     fn do_values<F>(&mut self, mut apply: F)
     where
         F: FnMut(&mut T),
     {
-        for c in self.callbacks.values_mut() {
+        for c in self.handlers.values_mut() {
             apply(c);
         }
     }
@@ -748,7 +748,7 @@ where
 {
     fn default() -> Self {
         MapStateStorage {
-            callbacks: hashbrown::HashMap::new(),
+            handlers: hashbrown::HashMap::new(),
         }
     }
 }

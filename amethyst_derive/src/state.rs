@@ -15,7 +15,7 @@ pub fn impl_state_enum(ast: &DeriveInput, en: &DataEnum) -> TokenStream {
     let base = &ast.ident;
     let storage = Ident::new(&format!("{}StateStorage", base), Span::call_site());
 
-    let callback = quote!(Box<dyn amethyst::state::StateHandler<#base, E>>);
+    let handler = quote!(Box<dyn amethyst::state::StateHandler<#base, E>>);
 
     let mut field_inits = Vec::new();
     let mut fields = Vec::new();
@@ -55,10 +55,10 @@ pub fn impl_state_enum(ast: &DeriveInput, en: &DataEnum) -> TokenStream {
                 let var = &variant.ident;
                 let m = quote!(#base::#var);
 
-                fields.push(quote!(#field: Option<#callback>));
+                fields.push(quote!(#field: Option<#handler>));
                 field_inits.push(quote!(#field: None));
                 insert.push(
-                    quote!(#m => return ::std::mem::replace(&mut self.#field, Some(callback))),
+                    quote!(#m => return ::std::mem::replace(&mut self.#field, Some(handler))),
                 );
                 get_mut.push(quote!(#m => return self.#field.as_mut()));
                 do_values.push(quote! {
@@ -78,10 +78,10 @@ pub fn impl_state_enum(ast: &DeriveInput, en: &DataEnum) -> TokenStream {
                 }
 
                 fields.push(
-                    quote!(#field: <#element as amethyst::state::State<E, #callback>>::Storage),
+                    quote!(#field: <#element as amethyst::state::State<E, #handler>>::Storage),
                 );
                 field_inits.push(quote!(#field: Default::default()));
-                insert.push(quote!(#m => return self.#field.insert(value, callback)));
+                insert.push(quote!(#m => return self.#field.insert(value, handler)));
                 get_mut.push(quote!(#m_ref => return self.#field.get_mut(value)));
                 do_values.push(quote!(self.#field.do_values(&mut apply);));
             }
@@ -107,24 +107,24 @@ pub fn impl_state_enum(ast: &DeriveInput, en: &DataEnum) -> TokenStream {
             }
         }
 
-        impl<E> amethyst::state::StateStorage<#base, #callback> for #storage<E> {
+        impl<E> amethyst::state::StateStorage<#base, #handler> for #storage<E> {
             fn insert(
                 &mut self,
                 state: #base,
-                callback: #callback,
-            ) -> Option<#callback> {
+                handler: #handler,
+            ) -> Option<#handler> {
                 match state {
                     #(#insert,)*
                 }
             }
 
-            fn get_mut(&mut self, value: &#base) -> Option<&mut #callback> {
+            fn get_mut(&mut self, value: &#base) -> Option<&mut #handler> {
                 match *value {
                     #(#get_mut,)*
                 }
             }
 
-            fn do_values<F>(&mut self, mut apply: F) where F: FnMut(&mut #callback) {
+            fn do_values<F>(&mut self, mut apply: F) where F: FnMut(&mut #handler) {
                 #(#do_values)*
             }
         }
